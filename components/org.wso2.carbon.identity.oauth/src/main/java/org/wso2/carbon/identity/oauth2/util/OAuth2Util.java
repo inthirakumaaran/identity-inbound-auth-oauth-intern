@@ -1182,7 +1182,8 @@ public class OAuth2Util {
         if (codeVerifier == null) {
             return false;
         }
-        if (!oauthcode.equals(codeVerifier)) {
+        String authcode =decodeSplitbase64TB(oauthcode);
+        if (!authcode.equals(hashTB(codeVerifier))) {
             return false;
         }
         return true;
@@ -1239,7 +1240,7 @@ public class OAuth2Util {
     //decode base64 encoding and split it to get the first value
     //used in token binding cases.
     public static String decodeSplitbase64TB(String base64encode){
-        return (new String(Base64Utils.decode(base64encode), (Charsets.UTF_8))).split(":")[0];
+        return (new String(Base64Utils.decode(base64encode), (Charsets.UTF_8))).split(";")[0];
     }
 
 

@@ -285,7 +285,8 @@ public class TokenMgtDAO {
             insertTokenPrepStmt.setString(13, accessTokenDO.getTokenId());
             insertTokenPrepStmt.setString(14, accessTokenDO.getGrantType());
             insertTokenPrepStmt.setString(15, accessTokenDO.getAuthzUser().getAuthenticatedSubjectIdentifier());
-            insertTokenPrepStmt.setString(16, persistenceProcessor.getProcessedClientId(consumerKey));
+            insertTokenPrepStmt.setString(16, accessTokenDO.gettBhashAccess());
+            insertTokenPrepStmt.setString(17, persistenceProcessor.getProcessedClientId(consumerKey));
             insertTokenPrepStmt.execute();
 
             String accessTokenId = accessTokenDO.getTokenId();
@@ -497,6 +498,7 @@ public class TokenMgtDAO {
                     String userType = resultSet.getString(8);
                     String tokenId = resultSet.getString(9);
                     String subjectIdentifier = resultSet.getString(10);
+                    String tokenBindingHash=resultSet.getString(11);
                     // data loss at dividing the validity period but can be neglected
                     AuthenticatedUser user = new AuthenticatedUser();
                     user.setUserName(tenantAwareUsernameWithNoUserDomain);
@@ -510,6 +512,7 @@ public class TokenMgtDAO {
                     accessTokenDO.setRefreshToken(refreshToken);
                     accessTokenDO.setTokenState(tokenState);
                     accessTokenDO.setTokenId(tokenId);
+                    accessTokenDO.settBhashAccess(tokenBindingHash);
                     return accessTokenDO;
                 }
             }
@@ -984,7 +987,8 @@ public class TokenMgtDAO {
                     String refreshToken = resultSet.getString(11);
                     String tokenId = resultSet.getString(12);
                     String grantType = resultSet.getString(13);
-                    String subjectIdentifier = resultSet.getString(14);
+                    String tbHash=resultSet.getString(14);
+                    String subjectIdentifier = resultSet.getString(15);
 
                     AuthenticatedUser user = new AuthenticatedUser();
                     user.setUserName(authorizedUser);
@@ -997,6 +1001,7 @@ public class TokenMgtDAO {
                     dataDO.setAccessToken(accessTokenIdentifier);
                     dataDO.setRefreshToken(refreshToken);
                     dataDO.setTokenId(tokenId);
+                    dataDO.settBhashAccess(tbHash);
                     dataDO.setGrantType(grantType);
                     dataDO.setTenantID(tenantId);
 
