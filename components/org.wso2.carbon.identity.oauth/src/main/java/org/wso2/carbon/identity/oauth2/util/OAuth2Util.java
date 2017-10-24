@@ -1176,6 +1176,7 @@ public class OAuth2Util {
         log.error("Unsupported Signature Algorithm in identity.xml");
         throw new IdentityOAuth2Exception("Unsupported Signature Algorithm in identity.xml");
     }
+
     //token binding methods
     //PCKE validation for TokenBinding
     public static boolean doTBPKCEvalidation(String referenceCodeChallenge, String codeVerifier, String oauthcode) {
@@ -1188,6 +1189,7 @@ public class OAuth2Util {
         }
         return true;
     }
+
     //check for TokenBinding header in request headers
     //check for token binding header in the request
     public static String checkTB(OAuthTokenReqMessageContext tokReqMsgCtx,String httpTBheader) {
@@ -1219,6 +1221,7 @@ public class OAuth2Util {
         }
         return tokenBindingId;
     }
+
     //Hash the tokenbinding ID in SHA256
     public static String hashTB(String tBID) {
         String bindvalue="";
@@ -1237,6 +1240,7 @@ public class OAuth2Util {
         }
         return bindvalue;
     }
+
     //decode base64 encoding and split it to get the first value
     //used in token binding cases.
     public static String decodeSplitbase64TB(String base64encode){
