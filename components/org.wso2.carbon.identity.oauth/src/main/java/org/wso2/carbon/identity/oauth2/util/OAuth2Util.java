@@ -18,14 +18,14 @@
 
 package org.wso2.carbon.identity.oauth2.util;
 
+import com.nimbusds.jose.Algorithm;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.crypto.RSASSAVerifier;
-import com.nimbusds.jose.Algorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSSigner;
+import com.nimbusds.jose.JWSVerifier;
 import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
 import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.JWT;
 import com.nimbusds.jwt.JWTClaimsSet;
@@ -50,7 +50,6 @@ import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.oauth.IdentityOAuthAdminException;
 import org.wso2.carbon.identity.oauth.cache.AppInfoCache;
-import org.wso2.carbon.identity.oauth2.config.SpOAuth2ExpiryTimeConfiguration;
 import org.wso2.carbon.identity.oauth.cache.CacheEntry;
 import org.wso2.carbon.identity.oauth.cache.OAuthCache;
 import org.wso2.carbon.identity.oauth.cache.OAuthCacheKey;
@@ -63,12 +62,14 @@ import org.wso2.carbon.identity.oauth.dao.OAuthConsumerDAO;
 import org.wso2.carbon.identity.oauth.internal.OAuthComponentServiceHolder;
 import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.authz.OAuthAuthzReqMessageContext;
+import org.wso2.carbon.identity.oauth2.config.SpOAuth2ExpiryTimeConfiguration;
 import org.wso2.carbon.identity.oauth2.dao.TokenMgtDAO;
 import org.wso2.carbon.identity.oauth2.internal.OAuth2ServiceComponentHolder;
 import org.wso2.carbon.identity.oauth2.model.AccessTokenDO;
 import org.wso2.carbon.identity.oauth2.model.ClientCredentialDO;
-import org.wso2.carbon.identity.oauth2.model.HttpRequestHeader;
 import org.wso2.carbon.identity.oauth2.token.OAuthTokenReqMessageContext;
+import org.wso2.carbon.identity.oauth2.tokenBinding.TokenBinding;
+import org.wso2.carbon.identity.oauth2.tokenBinding.TokenBindingHandler;
 import org.wso2.carbon.registry.core.Registry;
 import org.wso2.carbon.registry.core.Resource;
 import org.wso2.carbon.registry.core.exceptions.RegistryException;
@@ -80,10 +81,6 @@ import org.wso2.carbon.utils.CarbonUtils;
 import org.wso2.carbon.utils.multitenancy.MultitenantConstants;
 import org.wso2.carbon.utils.multitenancy.MultitenantUtils;
 
-import javax.xml.namespace.QName;
-import javax.xml.stream.XMLInputFactory;
-import javax.xml.stream.XMLStreamException;
-import javax.xml.stream.XMLStreamReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -96,9 +93,9 @@ import java.security.Key;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.security.interfaces.RSAPublicKey;
 import java.security.cert.Certificate;
 import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import java.sql.Timestamp;
 import java.text.ParseException;
 import java.util.ArrayList;
@@ -114,6 +111,10 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.xml.namespace.QName;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamReader;
 
 /**
  * Utility methods for OAuth 2.0 implementation
@@ -204,7 +205,7 @@ public class OAuth2Util {
 
     private static Log log = LogFactory.getLog(OAuth2Util.class);
     private static long timestampSkew = OAuthServerConfiguration.getInstance().getTimeStampSkewInSeconds() * 1000;
-    private static ThreadLocal<Integer> clientTenatId = new ThreadLocal<>();
+    private static ThreadLocal<Integer> clientTenantId = new ThreadLocal<>();
     private static ThreadLocal<OAuthTokenReqMessageContext> tokenRequestContext = new ThreadLocal<>();
     private static ThreadLocal<OAuthAuthzReqMessageContext> authzRequestContext = new ThreadLocal<>();
     //Precompile PKCE Regex pattern for performance improvement
@@ -237,10 +238,10 @@ public class OAuth2Util {
      * @return
      */
     public static OAuthAuthzReqMessageContext getAuthzRequestContext() {
-	if (log.isDebugEnabled()) {
-	    log.debug("Retreived OAuthAuthzReqMessageContext from threadlocal");
-	}
-	return authzRequestContext.get();
+        if (log.isDebugEnabled()) {
+            log.debug("Retreived OAuthAuthzReqMessageContext from threadlocal");
+        }
+        return authzRequestContext.get();
     }
 
     /**
@@ -248,20 +249,20 @@ public class OAuth2Util {
      * @param context
      */
     public static void setAuthzRequestContext(OAuthAuthzReqMessageContext context) {
-	authzRequestContext.set(context);
-	if (log.isDebugEnabled()) {
-	    log.debug("Added OAuthAuthzReqMessageContext to threadlocal");
-	}
+        authzRequestContext.set(context);
+        if (log.isDebugEnabled()) {
+            log.debug("Added OAuthAuthzReqMessageContext to threadlocal");
+        }
     }
 
     /**
      *
      */
     public static void clearAuthzRequestContext() {
-	authzRequestContext.remove();
-	if (log.isDebugEnabled()) {
-	    log.debug("Cleared OAuthAuthzReqMessageContext");
-	}
+        authzRequestContext.remove();
+        if (log.isDebugEnabled()) {
+            log.debug("Cleared OAuthAuthzReqMessageContext");
+        }
     }
 
     /**
@@ -269,10 +270,10 @@ public class OAuth2Util {
      * @return
      */
     public static OAuthTokenReqMessageContext getTokenRequestContext() {
-	if (log.isDebugEnabled()) {
-	    log.debug("Retreived OAuthTokenReqMessageContext from threadlocal");
-	}
-	return tokenRequestContext.get();
+        if (log.isDebugEnabled()) {
+            log.debug("Retreived OAuthTokenReqMessageContext from threadlocal");
+        }
+        return tokenRequestContext.get();
     }
 
     /**
@@ -280,45 +281,45 @@ public class OAuth2Util {
      * @param context
      */
     public static void setTokenRequestContext(OAuthTokenReqMessageContext context) {
-	tokenRequestContext.set(context);
-	if (log.isDebugEnabled()) {
-	    log.debug("Added OAuthTokenReqMessageContext to threadlocal");
-	}
+        tokenRequestContext.set(context);
+        if (log.isDebugEnabled()) {
+            log.debug("Added OAuthTokenReqMessageContext to threadlocal");
+        }
     }
 
     /**
      *
      */
     public static void clearTokenRequestContext() {
-	tokenRequestContext.remove();
-	if (log.isDebugEnabled()) {
-	    log.debug("Cleared OAuthTokenReqMessageContext");
-	}
+        tokenRequestContext.remove();
+        if (log.isDebugEnabled()) {
+            log.debug("Cleared OAuthTokenReqMessageContext");
+        }
     }
 
     /**
      * @return
      */
     public static int getClientTenatId() {
-        if (clientTenatId.get() == null) {
+        if (clientTenantId.get() == null) {
             return -1;
         }
-        return clientTenatId.get().intValue();
+        return clientTenantId.get();
     }
 
     /**
      * @param tenantId
      */
     public static void setClientTenatId(int tenantId) {
-        Integer id = Integer.valueOf(tenantId);
-        clientTenatId.set(id);
+        Integer id = tenantId;
+        clientTenantId.set(id);
     }
 
     /**
      *
      */
     public static void clearClientTenantId() {
-        clientTenatId.remove();
+        clientTenantId.remove();
     }
 
     /**
@@ -490,18 +491,35 @@ public class OAuth2Util {
         return clientId + ":" + authzCode;
     }
 
+    /**
+     * Build the cache key string when storing token info in cache
+     *
+     * @param clientId
+     * @param scope
+     * @param authorizedUser
+     * @return
+     */
+    public static String buildCacheKeyStringForToken(String clientId, String scope, String authorizedUser) {
+        boolean isUsernameCaseSensitive = IdentityUtil.isUserStoreInUsernameCaseSensitive(authorizedUser);
+        if (isUsernameCaseSensitive) {
+            return clientId + ":" + authorizedUser + ":" + scope;
+        } else {
+            return clientId + ":" + authorizedUser.toLowerCase() + ":" + scope;
+        }
+    }
+
     public static AccessTokenDO validateAccessTokenDO(AccessTokenDO accessTokenDO) {
 
         long validityPeriodMillis = accessTokenDO.getValidityPeriodInMillis();
         long issuedTime = accessTokenDO.getIssuedTime().getTime();
 
         //check the validity of cached OAuth2AccessToken Response
-        long accessTokenValidityMillis = calculateValidityInMillis(issuedTime,validityPeriodMillis);
+        long accessTokenValidityMillis = getTimeToExpire(issuedTime,validityPeriodMillis);
 
         if (accessTokenValidityMillis > 1000) {
             long refreshValidityPeriodMillis = OAuthServerConfiguration.getInstance()
                     .getRefreshTokenValidityPeriodInSeconds() * 1000;
-            long refreshTokenValidityMillis = calculateValidityInMillis(issuedTime, refreshValidityPeriodMillis);
+            long refreshTokenValidityMillis = getTimeToExpire(issuedTime, refreshValidityPeriodMillis);
             if (refreshTokenValidityMillis > 1000) {
                 //Set new validity period to response object
                 accessTokenDO.setValidityPeriodInMillis(accessTokenValidityMillis);
@@ -793,7 +811,7 @@ public class OAuth2Util {
         }
 
         long refreshTokenIssuedTime = accessTokenDO.getRefreshTokenIssuedTime().getTime();
-        long refreshTokenValidity = calculateValidityInMillis(refreshTokenIssuedTime, refreshTokenValidityPeriodMillis);
+        long refreshTokenValidity = getTimeToExpire(refreshTokenIssuedTime, refreshTokenValidityPeriodMillis);
         if (refreshTokenValidity > 1000) {
             return refreshTokenValidity;
         }
@@ -820,12 +838,17 @@ public class OAuth2Util {
         }
 
         long issuedTime = accessTokenDO.getIssuedTime().getTime();
-        long validityMillis = calculateValidityInMillis(issuedTime, validityPeriodMillis);
+        long validityMillis = getTimeToExpire(issuedTime, validityPeriodMillis);
         if (validityMillis > 1000) {
             return validityMillis;
         } else {
             return 0;
         }
+    }
+
+    @Deprecated
+    public static long calculateValidityInMillis(long issuedTimeInMillis, long validityPeriodMillis) {
+        return getTimeToExpire(issuedTimeInMillis, validityPeriodMillis);
     }
 
     /**
@@ -835,7 +858,7 @@ public class OAuth2Util {
      * @param validityPeriodMillis
      * @return skew corrected validity period in milliseconds
      */
-    public static long calculateValidityInMillis(long issuedTimeInMillis, long validityPeriodMillis) {
+    public static long getTimeToExpire(long issuedTimeInMillis, long validityPeriodMillis) {
 
         return issuedTimeInMillis + validityPeriodMillis - (System.currentTimeMillis() - timestampSkew);
     }
@@ -948,7 +971,7 @@ public class OAuth2Util {
         public static String getOAuth2DCREPUrl(String tenantDomain) throws URISyntaxException {
             String oauth2TokenEPUrl = OAuthServerConfiguration.getInstance().getOAuth2DCREPUrl();
             if (StringUtils.isBlank(oauth2TokenEPUrl)) {
-                oauth2TokenEPUrl = IdentityUtil.getServerURL("/identity/connect/register", true, false);
+                oauth2TokenEPUrl = IdentityUtil.getServerURL("/api/identity/oauth2/dcr/v1.0/register", true, false);
             }
             if (StringUtils.isNotBlank(tenantDomain) && !MultitenantConstants.SUPER_TENANT_DOMAIN_NAME.equals
                     (tenantDomain)) {
@@ -1077,83 +1100,94 @@ public class OAuth2Util {
         //provided code challenge method is wrong
         return false;
     }
-    public static boolean doPKCEValidation(String referenceCodeChallenge, String codeVerifier, String
-            challenge_method, OAuthAppDO oAuthAppDO,String authorizationCode) throws IdentityOAuth2Exception {
+
+    @Deprecated
+    public static boolean doPKCEValidation(String referenceCodeChallenge, String codeVerifier, String challenge_method,
+                                           OAuthAppDO oAuthAppDO,String authorizationCode) throws IdentityOAuth2Exception {
+        return validatePKCE(referenceCodeChallenge, codeVerifier, challenge_method, oAuthAppDO,
+                authorizationCode);
+    }
+
+    public static boolean validatePKCE(String referenceCodeChallenge, String verificationCode, String challenge_method,
+                                       OAuthAppDO oAuthApp,String authorizationCode) throws IdentityOAuth2Exception {
         //ByPass PKCE validation if PKCE Support is disabled
         if(!isPKCESupportEnabled()) {
             return true;
         }
-        if (oAuthAppDO != null) {
-            if(oAuthAppDO.isTbMandatory()){
-                doTokenBindingPKCEValidation(referenceCodeChallenge,codeVerifier,authorizationCode);
+        if (oAuthApp != null) {
+            if (OAuthConstants.OAUTH_PKCE_REFERREDTB_CHALLENGE.equals(referenceCodeChallenge)) {
+                if (oAuthApp.isTbMandatory()) {
+                    TokenBinding tokenBinding = new TokenBindingHandler();
+                    return tokenBinding.validateAuthorizationCode(referenceCodeChallenge, verificationCode,
+                            authorizationCode);
+                }
+            }}
+
+        else if (oAuthApp != null && oAuthApp.isPkceMandatory() || referenceCodeChallenge != null) {
+
+            //As per RFC 7636 Fallback to 'plain' if no code_challenge_method parameter is sent
+            if(challenge_method == null || challenge_method.trim().length() == 0) {
+                challenge_method = "plain";
             }
 
-            if (oAuthAppDO.isPkceMandatory() || referenceCodeChallenge != null) {
-
-                //As per RFC 7636 Fallback to 'plain' if no code_challenge_method parameter is sent
-                if (challenge_method == null || challenge_method.trim().length() == 0) {
-                    challenge_method = "plain";
-                }
-
-                //if app with no PKCE code verifier arrives
-                if ((codeVerifier == null || codeVerifier.trim().length() == 0)) {
-                    //if pkce is mandatory, throw error
-                    if (oAuthAppDO.isPkceMandatory()) {
-                        throw new IdentityOAuth2Exception("No PKCE code verifier found.PKCE is mandatory for this " +
-                                "oAuth 2.0 application.");
-                    } else {
-                        //PKCE is optional, see if the authz code was requested with a PKCE challenge
-                        if (referenceCodeChallenge == null || referenceCodeChallenge.trim().length() == 0) {
-                            //since no PKCE challenge was provided
-                            return true;
-                        } else {
-                            throw new IdentityOAuth2Exception("Empty PKCE code_verifier sent. This authorization code " +
-                                    "requires a PKCE verification to obtain an access token.");
-                        }
-                    }
-                }
-                //verify that the code verifier is upto spec as per RFC 7636
-                if (!validatePKCECodeVerifier(codeVerifier)) {
-                    throw new IdentityOAuth2Exception("Code verifier used is not up to RFC 7636 specifications.");
-                }
-                if (OAuthConstants.OAUTH_PKCE_PLAIN_CHALLENGE.equals(challenge_method)) {
-                    //if the current application explicitly doesn't support plain, throw exception
-                    if (!oAuthAppDO.isPkceSupportPlain()) {
-                        throw new IdentityOAuth2Exception("This application does not allow 'plain' transformation algorithm.");
-                    }
-                    if (!referenceCodeChallenge.equals(codeVerifier)) {
-                        return false;
-                    }
-                } else if (OAuthConstants.OAUTH_PKCE_S256_CHALLENGE.equals(challenge_method)) {
-
-                    try {
-                        MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
-
-                        byte[] hash = messageDigest.digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
-                        //Trim the base64 string to remove trailing CR LF characters.
-                        String referencePKCECodeChallenge = new String(Base64.encodeBase64URLSafe(hash),
-                                StandardCharsets.UTF_8).trim();
-                        if (!referencePKCECodeChallenge.equals(referenceCodeChallenge)) {
-                            return false;
-                        }
-                    } catch (NoSuchAlgorithmException e) {
-                        if (log.isDebugEnabled()) {
-                            log.debug("Failed to create SHA256 Message Digest.");
-                        }
-                        return false;
-                    }
+            //if app with no PKCE code verifier arrives
+            if ((verificationCode == null || verificationCode.trim().length() == 0)) {
+                //if pkce is mandatory, throw error
+                if(oAuthApp.isPkceMandatory()) {
+                    throw new IdentityOAuth2Exception("No PKCE code verifier found.PKCE is mandatory for this " +
+                            "oAuth 2.0 application.");
                 } else {
-                    //Invalid OAuth2 token response
-                    throw new IdentityOAuth2Exception("Invalid OAuth2 Token Response. Invalid PKCE Code Challenge Method '"
-                            + challenge_method + "'");
+                    //PKCE is optional, see if the authz code was requested with a PKCE challenge
+                    if(referenceCodeChallenge == null || referenceCodeChallenge.trim().length() == 0) {
+                        //since no PKCE challenge was provided
+                        return true;
+                    } else {
+                        throw new IdentityOAuth2Exception("Empty PKCE code_verifier sent. This authorization code " +
+                                "requires a PKCE verification to obtain an access token.");
+                    }
                 }
+            }
+            //verify that the code verifier is upto spec as per RFC 7636
+            if(!validatePKCECodeVerifier(verificationCode)) {
+                throw new IdentityOAuth2Exception("Code verifier used is not up to RFC 7636 specifications.");
+            }
+            if (OAuthConstants.OAUTH_PKCE_PLAIN_CHALLENGE.equals(challenge_method)) {
+                //if the current application explicitly doesn't support plain, throw exception
+                if(!oAuthApp.isPkceSupportPlain()) {
+                    throw new IdentityOAuth2Exception("This application does not allow 'plain' transformation algorithm.");
+                }
+                if (!referenceCodeChallenge.equals(verificationCode)) {
+                    return false;
+                }
+            } else if (OAuthConstants.OAUTH_PKCE_S256_CHALLENGE.equals(challenge_method)) {
+
+                try {
+                    MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
+
+                    byte[] hash = messageDigest.digest(verificationCode.getBytes(StandardCharsets.US_ASCII));
+                    //Trim the base64 string to remove trailing CR LF characters.
+                    String referencePKCECodeChallenge = new String(Base64.encodeBase64URLSafe(hash),
+                            StandardCharsets.UTF_8).trim();
+                    if (!referencePKCECodeChallenge.equals(referenceCodeChallenge)) {
+                        return false;
+                    }
+                } catch (NoSuchAlgorithmException e) {
+                    if (log.isDebugEnabled()) {
+                        log.debug("Failed to create SHA256 Message Digest.");
+                    }
+                    return false;
+                }
+            } else {
+                //Invalid OAuth2 token response
+                throw new IdentityOAuth2Exception("Invalid OAuth2 Token Response. Invalid PKCE Code Challenge Method '"
+                        + challenge_method + "'");
             }
         }
         //pkce validation successful
         return true;
     }
 
-    public static boolean isPKCESupportEnabled() {
+    public static boolean isPKCESupportEnabled(){
         return OAuth2ServiceComponentHolder.isPkceEnabled();
     }
 
@@ -1176,8 +1210,7 @@ public class OAuth2Util {
                 Resource resource = registry.newResource();
                 if (scopes.size() > 0) {
                     for (Map.Entry<String, String> entry : scopes.entrySet()) {
-                        String valueStr = entry.getValue().toString();
-                        resource.setProperty(entry.getKey(), valueStr);
+                        resource.setProperty(entry.getKey(), entry.getValue());
                     }
                 }
 
@@ -1198,7 +1231,7 @@ public class OAuth2Util {
                 Resource resource = registry.get(OAuthConstants.SCOPE_RESOURCE_PATH);
                 Properties properties = resource.getProperties();
                 Enumeration e = properties.propertyNames();
-                List<String> scopes = new ArrayList();
+                List<String> scopes = new ArrayList<>();
                 while (e.hasMoreElements()) {
                     scopes.add((String) e.nextElement());
                 }
@@ -1230,7 +1263,8 @@ public class OAuth2Util {
         }
 
         if (accessTokenDO == null) {
-            throw new IllegalArgumentException("Invalid access token");
+            // this means the token is not active so we can't proceed further
+            throw new IllegalArgumentException("Invalid Access Token. Access token is not ACTIVE.");
         }
 
         // add the token back to the cache in the case of a cache miss
@@ -1797,29 +1831,24 @@ public class OAuth2Util {
         return buf.toString();
     }
 
-    public static ArrayList<String> getEssentialClaims(String essentialClaims, String claimType) {
+    public static List<String> getEssentialClaims(String essentialClaims, String claimType) {
         JSONObject jsonObjectClaims = new JSONObject(essentialClaims);
-        String key;
-        ArrayList essentailClaimslist = new ArrayList();
-        if ((jsonObjectClaims != null) && jsonObjectClaims.toString().contains(claimType)) {
+        List<String> essentialClaimsList = new ArrayList<>();
+        if (jsonObjectClaims.toString().contains(claimType)) {
             JSONObject newJSON = jsonObjectClaims.getJSONObject(claimType);
             if (newJSON != null) {
                 Iterator<?> keys = newJSON.keys();
                 while (keys.hasNext()) {
-                    key = (String) keys.next();
+                    String key = (String) keys.next();
                     if (!newJSON.isNull(key)) {
-                        String value;
-                        value = newJSON.get(key).toString();
+                        String value = newJSON.get(key).toString();
                         JSONObject jsonObjectValues = new JSONObject(value);
-                        if (jsonObjectValues != null) {
-                            Iterator<?> claimKeyValues = jsonObjectValues.keys();
-                            while (claimKeyValues.hasNext()) {
-                                String claimKey = (String) claimKeyValues.next();
-                                String claimValue = jsonObjectValues.get(claimKey).toString();
-                                if (claimValue.equals("true") &&
-                                        claimKey.equals(OAuthConstants.OAuth20Params.ESSENTIAL)) {
-                                    essentailClaimslist.add(key);
-                                }
+                        Iterator<?> claimKeyValues = jsonObjectValues.keys();
+                        while (claimKeyValues.hasNext()) {
+                            String claimKey = (String) claimKeyValues.next();
+                            String claimValue = jsonObjectValues.get(claimKey).toString();
+                            if (Boolean.parseBoolean(claimValue) && claimKey.equals(OAuthConstants.OAuth20Params.ESSENTIAL)) {
+                                essentialClaimsList.add(key);
                             }
                         }
                     }
@@ -1827,7 +1856,7 @@ public class OAuth2Util {
             }
         }
 
-        return essentailClaimslist;
+        return essentialClaimsList;
     }
 
     /**
@@ -1886,8 +1915,7 @@ public class OAuth2Util {
         }
 
         String usernameForToken = authenticatedUser.toString();
-        if (!OAuthServerConfiguration.getInstance().isMapFederatedUsersToLocal() && authenticatedUser.
-                isFederatedUser()) {
+        if (!OAuthServerConfiguration.getInstance().isMapFederatedUsersToLocal() && authenticatedUser.isFederatedUser()) {
             usernameForToken = OAuth2Util.getFederatedUserDomain(authenticatedUser.getFederatedIdPName());
             usernameForToken = usernameForToken + UserCoreConstants.DOMAIN_SEPARATOR + authenticatedUser.
                     getAuthenticatedSubjectIdentifier();
@@ -1899,126 +1927,40 @@ public class OAuth2Util {
     }
 
     /**
-     * perform PCKE validation for TokenBinding
+     * Get authorized user from the {@link AccessTokenDO}. When getting authorized user we also make sure flag to
+     * determine whether the user is federated or not is set.
      *
-     * @param PKCECodeChallenge
-     * @param codeVerifier
-     * @param oauthorizationCode
+     * @param accessTokenDO
      * @return
      */
-    public static boolean doTokenBindingPKCEValidation(String PKCECodeChallenge, String codeVerifier, String
-            oauthorizationCode) {
-        if (OAuthConstants.OAUTH_PKCE_REFERREDTB_CHALLENGE.equals(PKCECodeChallenge)) {
-            if (codeVerifier == null) {
-                return false;
-            }
-            String authorizationCode = decodeBase64ThenSplit(oauthorizationCode,";");
-            if (!authorizationCode.equals(hashOfString(codeVerifier))) {
-                if (log.isDebugEnabled()) {
-                    log.debug("PKCE validation failed due to Token binding Value of Authorization Code is not equal " +
-                            "to current token binding value of connection");
-                }
-                return false;
-            }
+    public static AuthenticatedUser getAuthenticatedUser(AccessTokenDO accessTokenDO) {
+        AuthenticatedUser authenticatedUser = accessTokenDO.getAuthzUser();
+        if (authenticatedUser != null) {
+            authenticatedUser.setFederatedUser(isFederatedUser(authenticatedUser));
         }
-        return true;
+        return authenticatedUser;
     }
 
     /**
-     * find TokenBinding header in request headers
+     * Determine whether the user represented by {@link AuthenticatedUser} object is a federated user.
      *
-     * @param tokReqMsgCtx
-     * @param httpTBheader
-     * @return
+     * @param authenticatedUser
+     * @return true if user is federated, false otherwise.
      */
-    public static String findTokenBindingHeader(OAuthTokenReqMessageContext tokReqMsgCtx, String httpTBheader) {
-        HttpRequestHeader[] httpRequestHeaders = tokReqMsgCtx.getOauth2AccessTokenReqDTO().getHttpRequestHeaders();
-        String tokenBindingId =null;
-        if (httpRequestHeaders != null) {
-            OAuthAppDO oAuthAppDO = null;
-            try {
-                oAuthAppDO = getAppInformationByClientId(tokReqMsgCtx.getOauth2AccessTokenReqDTO().getClientId());
-            } catch (InvalidOAuthClientException e) {
-                log.debug("Error while retrieving app information for clientId");
-            } catch (IdentityOAuth2Exception e) {
-                log.debug("Error while retrieving app information for clientId");
-            }
-            for (HttpRequestHeader httpRequestHeader : httpRequestHeaders) {
-                if (httpRequestHeader.getName().equalsIgnoreCase(httpTBheader)) {
-                    if (oAuthAppDO != null && oAuthAppDO.isTbMandatory()) {
-                        tokenBindingId = httpRequestHeader.getValue()[0];
-                    }
-                    break;
-                }
-            }
-        }
-        return tokenBindingId;
-    }
+    public static boolean isFederatedUser(AuthenticatedUser authenticatedUser) {
+        String userStoreDomain = authenticatedUser.getUserStoreDomain();
 
-    /**
-     * find TokenBinding header in request headers
-     *
-     * @param oauthAuthzMsgCtx
-     * @param httpTBheader
-     * @return
-     */
-    public static String findTokenBindingHeader(OAuthAuthzReqMessageContext oauthAuthzMsgCtx, String httpTBheader) {
-        HttpRequestHeader[] httpRequestHeaders = oauthAuthzMsgCtx.getAuthorizationReqDTO().getHttpRequestHeaders();
-        String tokenBindingId = null;
-        if (httpRequestHeaders != null) {
-            OAuthAppDO oAuthAppDO = null;
-            try {
-                oAuthAppDO = new OAuthAppDAO().getAppInformation(oauthAuthzMsgCtx.getAuthorizationReqDTO().getConsumerKey());
-            } catch (InvalidOAuthClientException e) {
-                log.debug("Error while retrieving app information for ConsumerKey");
-            } catch (IdentityOAuth2Exception e) {
-                log.debug("Error while retrieving app information for ConsumerKey");
-            }
-            for (HttpRequestHeader httpRequestHeader : httpRequestHeaders) {
-                if (httpRequestHeader.getName().equalsIgnoreCase(httpTBheader)) {
-                    if (oAuthAppDO != null && oAuthAppDO.isTbMandatory()) {
-                        tokenBindingId = httpRequestHeader.getValue()[0];
-                    }
-                    break;
-                }
-            }
-        }
-        return tokenBindingId;
-    }
+        // We consider a user federated if the flag for federated user is set or the user store domain contain the
+        // federated user store domain prefix.
+        boolean isExplicitlyFederatedUser =
+                StringUtils.startsWith(userStoreDomain, OAuthConstants.UserType.FEDERATED_USER_DOMAIN_PREFIX) ||
+                        authenticatedUser.isFederatedUser();
 
-    /**
-     * Use to hash token binding ID
-     *
-     * @param tokenBindingID
-     * @return
-     */
-    public static String hashOfString(String tokenBindingID) {
-        String hashValue ="";
-        try {
-            MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = messageDigest.digest(tokenBindingID.getBytes(StandardCharsets.US_ASCII));
-            //Trim the base64 string to remove trailing CR LF characters.
-            hashValue = new String(Base64.encodeBase64URLSafe(hash),
-                    StandardCharsets.UTF_8).trim();
-        } catch (NoSuchAlgorithmException e) {
-            log.error("NoSuchAlgorithmException while calculating SHA-256 of "+tokenBindingID+".");
-            if (log.isDebugEnabled()) {
-                log.debug("Failed to create SHA256 Message Digest.");
-            }
-        }
-        return hashValue;
-    }
+        // Flag to make sure federated user is not mapped to local users.
+        boolean isFederatedUserNotMappedToLocalUser =
+                !OAuthServerConfiguration.getInstance().isMapFederatedUsersToLocal();
 
-    /**
-     * Decode base64 encoding and split it to get the first value/
-     * used in token binding cases.
-     *
-     * @param base64encode
-     * @param delimiter
-     * @return
-     */
-    public static String decodeBase64ThenSplit(String base64encode,String delimiter) {
-        return (new String(Base64Utils.decode(base64encode), (Charsets.UTF_8))).split(delimiter)[0];
+        return isExplicitlyFederatedUser && isFederatedUserNotMappedToLocalUser;
     }
 
 }

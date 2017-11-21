@@ -16,7 +16,7 @@
  * under the License.
  */
 
-package org.wso2.carbon.identity.oauth2.token.handlers.grant;
+package org.wso2.carbon.identity.oauth2;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.oltu.oauth2.common.error.OAuthError;
@@ -33,16 +33,16 @@ import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.oauth.config.OAuthServerConfiguration;
 import org.wso2.carbon.identity.oauth.dao.OAuthAppDAO;
 import org.wso2.carbon.identity.oauth.dao.OAuthAppDO;
-import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.authz.OAuthAuthzReqMessageContext;
 import org.wso2.carbon.identity.oauth2.dao.TokenMgtDAO;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenReqDTO;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenRespDTO;
 import org.wso2.carbon.identity.oauth2.model.AccessTokenDO;
-import org.wso2.carbon.identity.oauth2.model.HttpRequestHeader;
 import org.wso2.carbon.identity.oauth2.model.RefreshTokenValidationDataDO;
 import org.wso2.carbon.identity.oauth2.token.OAuthTokenReqMessageContext;
 import org.wso2.carbon.identity.oauth2.token.OauthTokenIssuer;
+import org.wso2.carbon.identity.oauth2.token.handlers.grant.AbstractAuthorizationGrantHandler;
+import org.wso2.carbon.identity.oauth2.token.handlers.grant.RefreshGrantHandler;
 import org.wso2.carbon.identity.oauth2.tokenBinding.TokenBindingHandler;
 import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
 import org.wso2.carbon.identity.testutil.powermock.PowerMockIdentityBaseTest;
@@ -57,7 +57,6 @@ import static org.mockito.Matchers.anyLong;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.MockitoAnnotations.initMocks;
 import static org.powermock.api.mockito.PowerMockito.doNothing;
-import static org.powermock.api.mockito.PowerMockito.doReturn;
 import static org.powermock.api.mockito.PowerMockito.mockStatic;
 import static org.powermock.api.mockito.PowerMockito.spy;
 import static org.powermock.api.mockito.PowerMockito.when;
@@ -73,15 +72,12 @@ import static org.wso2.carbon.identity.oauth.common.OAuthConstants.UNASSIGNED_VA
  */
 @PrepareForTest({OAuthServerConfiguration.class, TokenMgtDAO.class, IdentityUtil.class, OAuth2Util.class,
         AbstractAuthorizationGrantHandler.class})
-public class RefreshGrantHandlerTest extends PowerMockIdentityBaseTest {
+public class newRefreshGrantHandlerTest extends PowerMockIdentityBaseTest {
 
     @Mock
     private TokenMgtDAO mockTokenMgtDAO;
     @Mock
     private OAuthServerConfiguration mockOAuthServerConfiguration;
-    @Mock
-    private TokenBindingHandler tokenBindingHandler;
-
     @Mock
     private OAuthAppDO authAppDO;
 
@@ -142,58 +138,52 @@ public class RefreshGrantHandlerTest extends PowerMockIdentityBaseTest {
     public void testValidateGrant(String clientId, String refreshToken, String accessToken, String tokenState,
                                   Boolean isUsernameCaseSensitive, Boolean expected) throws Exception {
 
-//        mockStatic(OAuth2Util.class);
-//        RefreshTokenValidationDataDO validationDataDO = constructValidationDataDO(accessToken, tokenState,
-//                isUsernameCaseSensitive);
-//        when(mockTokenMgtDAO.validateRefreshToken(anyString(), anyString())).thenReturn(validationDataDO);
-//        when(IdentityUtil.isUserStoreInUsernameCaseSensitive(anyString())).thenReturn(isUsernameCaseSensitive);
-//        when(OAuth2Util.checkUserNameAssertionEnabled()).thenReturn(true);
-////        when(authAppDO.isTbMandatory()).thenReturn(false);
-////        whenNew(OAuthAppDO.class).withNoArguments().thenReturn(authAppDO);
-////        when(authAppDAO.getAppInformation(anyString())).thenReturn(authAppDO);
-////        whenNew(OAuthAppDAO.class).withNoArguments().thenReturn(authAppDAO);
-////        when(OAuth2Util.getAppInformationByClientId(anyString())).thenReturn(authAppDO);
-////        when(tokenBindingHandler.validateRefreshToken(any(OAuthTokenReqMessageContext.class),anyString())).thenReturn
-////                (true);
-////        when(tokenBindingHandler.checkTokenBindingHeader(any(HttpRequestHeader[].class),anyString())).thenReturn
-////                ("test");
-////        when(tokenBindingHandler.findTokenBindingHeader(any(OAuthTokenReqMessageContext.class),anyString()))
-////                .thenReturn("test");
-////        whenNew(TokenBindingHandler.class).withNoArguments().thenReturn(tokenBindingHandler);
-//        if ((StringUtils.equals(tokenState, TOKEN_STATE_EXPIRED) || StringUtils.equals(tokenState,
-//                TOKEN_STATE_ACTIVE)) && StringUtils.equals(clientId, "clientId2")) {
-//
-//            AccessTokenDO[] accessTokenDOS = new AccessTokenDO[2];
-//            accessTokenDOS[0] = new AccessTokenDO();
-//            accessTokenDOS[0].setTokenState(TOKEN_STATE_ACTIVE);
-//            accessTokenDOS[0].setRefreshToken("refreshToken1");
-//
-//            accessTokenDOS[1] = new AccessTokenDO();
-//            accessTokenDOS[1].setTokenState(TOKEN_STATE_EXPIRED);
-//            accessTokenDOS[1].setRefreshToken("refreshToken1");
-//
-//            when(mockTokenMgtDAO.retrieveLatestAccessTokens(anyString(), any(AuthenticatedUser.class), anyString(),
-//                    anyString(), anyBoolean(), anyInt())).thenReturn(Arrays.asList(accessTokenDOS));
-//
-//            when(OAuth2Util.checkAccessTokenPartitioningEnabled()).thenReturn(true);
-//            when(OAuth2Util.checkUserNameAssertionEnabled()).thenReturn(true);
-//        }
-//
-//        System.setProperty(CarbonBaseConstants.CARBON_HOME, "");
-//        refreshGrantHandler = new RefreshGrantHandler();
-//        refreshGrantHandler.init();
-//
-//        OAuth2AccessTokenReqDTO tokenReqDTO = new OAuth2AccessTokenReqDTO();
-//        tokenReqDTO.setClientId(clientId);
-//        tokenReqDTO.setRefreshToken(refreshToken);
-//        OAuthTokenReqMessageContext tokenReqMessageContext = new OAuthTokenReqMessageContext(tokenReqDTO);
-//
-//        Boolean actual = refreshGrantHandler.validateGrant(tokenReqMessageContext);
-//        if (expected) {
-//            assertEquals(actual, expected, "Refresh token validation should be successful.");
-//        } else {
-//            assertEquals(actual, expected, "Refresh token validation should fail.");
-//        }
+        mockStatic(OAuth2Util.class);
+        RefreshTokenValidationDataDO validationDataDO = constructValidationDataDO(accessToken, tokenState,
+                isUsernameCaseSensitive);
+        when(mockTokenMgtDAO.validateRefreshToken(anyString(), anyString())).thenReturn(validationDataDO);
+        when(IdentityUtil.isUserStoreInUsernameCaseSensitive(anyString())).thenReturn(isUsernameCaseSensitive);
+//        when(authAppDO.isTbMandatory()).thenReturn(false);
+//        whenNew(OAuthAppDO.class).withNoArguments().thenReturn(authAppDO);
+//        when(authAppDAO.getAppInformation(anyString())).thenReturn(authAppDO);
+//        whenNew(OAuthAppDAO.class).withNoArguments().thenReturn(authAppDAO);
+
+        if ((StringUtils.equals(tokenState, TOKEN_STATE_EXPIRED) || StringUtils.equals(tokenState,
+                TOKEN_STATE_ACTIVE)) && StringUtils.equals(clientId, "clientId2")) {
+
+            AccessTokenDO[] accessTokenDOS = new AccessTokenDO[2];
+            accessTokenDOS[0] = new AccessTokenDO();
+            accessTokenDOS[0].setTokenState(TOKEN_STATE_ACTIVE);
+            accessTokenDOS[0].setRefreshToken("refreshToken1");
+
+            accessTokenDOS[1] = new AccessTokenDO();
+            accessTokenDOS[1].setTokenState(TOKEN_STATE_EXPIRED);
+            accessTokenDOS[1].setRefreshToken("refreshToken1");
+
+            when(mockTokenMgtDAO.retrieveLatestAccessTokens(anyString(), any(AuthenticatedUser.class), anyString(),
+                    anyString(), anyBoolean(), anyInt())).thenReturn(Arrays.asList(accessTokenDOS));
+
+            when(OAuth2Util.checkAccessTokenPartitioningEnabled()).thenReturn(true);
+            when(OAuth2Util.checkUserNameAssertionEnabled()).thenReturn(true);
+        }
+
+        System.setProperty(CarbonBaseConstants.CARBON_HOME, "");
+        refreshGrantHandler = new RefreshGrantHandler();
+        refreshGrantHandler.init();
+
+        OAuth2AccessTokenReqDTO tokenReqDTO = new OAuth2AccessTokenReqDTO();
+        tokenReqDTO.setClientId(clientId);
+        tokenReqDTO.setRefreshToken(refreshToken);
+        tokenReqDTO.setHttpRequestHeaders(null);
+        tokenReqDTO.setClientId("test");
+        OAuthTokenReqMessageContext tokenReqMessageContext = new OAuthTokenReqMessageContext(tokenReqDTO);
+
+        Boolean actual = refreshGrantHandler.validateGrant(tokenReqMessageContext);
+        if (expected) {
+            assertEquals(actual, expected, "Refresh token validation should be successful.");
+        } else {
+            assertEquals(actual, expected, "Refresh token validation should fail.");
+        }
     }
 
     @Test(expectedExceptions = IdentityOAuth2Exception.class)

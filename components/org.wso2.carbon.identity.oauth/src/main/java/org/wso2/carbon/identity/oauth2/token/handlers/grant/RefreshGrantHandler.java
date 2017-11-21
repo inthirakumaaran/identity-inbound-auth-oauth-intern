@@ -40,8 +40,9 @@ import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenRespDTO;
 import org.wso2.carbon.identity.oauth2.model.AccessTokenDO;
 import org.wso2.carbon.identity.oauth2.model.RefreshTokenValidationDataDO;
 import org.wso2.carbon.identity.oauth2.token.OAuthTokenReqMessageContext;
+import org.wso2.carbon.identity.oauth2.tokenBinding.TokenBinding;
+import org.wso2.carbon.identity.oauth2.tokenBinding.TokenBindingHandler;
 import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
-import org.wso2.carbon.utils.xml.StringUtils;
 
 import java.sql.Timestamp;
 import java.util.ArrayList;
@@ -73,7 +74,7 @@ public class RefreshGrantHandler extends AbstractAuthorizationGrantHandler {
         RefreshTokenValidationDataDO validationDataDO = tokenMgtDAO.validateRefreshToken(
                 tokenReqDTO.getClientId(), refreshToken);
         //get Token Binding ID from the HTTP Headers
-        String tokenBindingId = OAuth2Util.findTokenBindingHeader(tokReqMsgCtx, OAuthConstants.HTTP_TB_PROVIDED_HEADER_NAME);
+//        String tokenBindingId = OAuth2Util.findTokenBindingHeader(tokReqMsgCtx, OAuthConstants.HTTP_TB_PROVIDED_HEADER_NAME);
         if (validationDataDO.getAccessToken() == null) {
             if (log.isDebugEnabled()) {
                 log.debug("Invalid Refresh Token provided for Client with " +
@@ -140,19 +141,12 @@ public class RefreshGrantHandler extends AbstractAuthorizationGrantHandler {
             }
 
         }
-
-        if (!StringUtils.isEmpty(tokenBindingId)) {
-            String TokenHashValue = refreshToken;
-            if (OAuth2Util.checkUserNameAssertionEnabled()) {
-                TokenHashValue = OAuth2Util.decodeBase64ThenSplit(TokenHashValue, ":");
+        TokenBinding tokenBinding = new TokenBindingHandler();
+        if(!tokenBinding.validateRefreshToken(tokReqMsgCtx,refreshToken)){
+            if (log.isDebugEnabled()) {
+                log.debug("Token Binding validation failed for refresh token");
             }
-            TokenHashValue = OAuth2Util.decodeBase64ThenSplit(TokenHashValue, ":");
-            if (!TokenHashValue.equals(OAuth2Util.hashOfString(tokenBindingId))) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Token Binding validation failed for refresh token");
-                }
-                return false;
-            }
+            return false;
         }
 
         if (log.isDebugEnabled()) {
