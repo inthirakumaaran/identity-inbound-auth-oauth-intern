@@ -1114,7 +1114,7 @@ public class OAuth2Util {
             return true;
         }
         if (oAuthApp != null) {
-            if (OAuthConstants.OAUTH_PKCE_REFERREDTB_CHALLENGE.equals(referenceCodeChallenge)) {
+            if (OAuthConstants.OAUTH_PKCE_REFERRED_TB_CHALLENGE.equals(referenceCodeChallenge)) {
                 if (oAuthApp.isTbMandatory()) {
                     TokenBinding tokenBinding = new TokenBindingHandler();
                     return tokenBinding.validateAuthorizationCode(referenceCodeChallenge, verificationCode,
