@@ -108,7 +108,8 @@ public class ClaimUtil {
             String subjectClaimValue = null;
 
             try {
-                AccessTokenDO accessTokenDO = OAuth2Util.getAccessTokenDOfromTokenIdentifier(getAccessToken(tokenResponse));
+                AccessTokenDO accessTokenDO = OAuth2Util.getAccessTokenDOfromTokenIdentifier(
+                        OAuth2Util.getAccessTokenIdentifier(tokenResponse));
                 // If the authenticated user is a federated user and had not mapped to local users, no requirement to
                 // retrieve claims from local userstore.
                 if (!OAuthServerConfiguration.getInstance().isMapFederatedUsersToLocal() && accessTokenDO != null) {
@@ -332,17 +333,16 @@ public class ClaimUtil {
         return UserCoreUtil.removeDomainFromName(tenantAwareUsername);
     }
 
-    private static Map<ClaimMapping, String> getUserAttributesFromCache(OAuth2TokenValidationResponseDTO tokenResponse) {
-        AuthorizationGrantCacheKey cacheKey = new AuthorizationGrantCacheKey(getAccessToken(tokenResponse));
-        AuthorizationGrantCacheEntry cacheEntry = AuthorizationGrantCache.getInstance().getValueFromCacheByToken(cacheKey);
+    private static Map<ClaimMapping, String> getUserAttributesFromCache(OAuth2TokenValidationResponseDTO tokenResponse)
+            throws UserInfoEndpointException {
+
+        AuthorizationGrantCacheKey cacheKey =
+                new AuthorizationGrantCacheKey(OAuth2Util.getAccessTokenIdentifier(tokenResponse));
+        AuthorizationGrantCacheEntry cacheEntry =
+                AuthorizationGrantCache.getInstance().getValueFromCacheByToken(cacheKey);
         if (cacheEntry == null) {
             return new HashMap<>();
         }
         return cacheEntry.getUserAttributes();
     }
-
-    private static String getAccessToken(OAuth2TokenValidationResponseDTO tokenResponse) {
-        return tokenResponse.getAuthorizationContextToken().getTokenString();
-    }
-
 }

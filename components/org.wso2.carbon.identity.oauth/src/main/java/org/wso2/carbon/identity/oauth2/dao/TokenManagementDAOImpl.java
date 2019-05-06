@@ -33,8 +33,11 @@ import org.wso2.carbon.identity.core.util.IdentityDatabaseUtil;
 import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.oauth.common.OAuthConstants;
+import org.wso2.carbon.identity.oauth.config.OAuthServerConfiguration;
 import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
+import org.wso2.carbon.identity.oauth2.Oauth2ScopeConstants;
 import org.wso2.carbon.identity.oauth2.internal.OAuth2ServiceComponentHolder;
+import org.wso2.carbon.identity.oauth2.model.AccessTokenDO;
 import org.wso2.carbon.identity.oauth2.model.RefreshTokenValidationDataDO;
 import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
 
@@ -42,6 +45,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.HashSet;
@@ -71,6 +75,7 @@ public class TokenManagementDAOImpl extends AbstractOAuthDAO implements TokenMan
     private static final String UTC = "UTC";
     private static final int DEFAULT_POOL_SIZE = 0;
     private static final boolean DEFAULT_PERSIST_ENABLED = true;
+    private boolean isHashDisabled = OAuth2Util.isHashDisabled();
 
     // These config properties are defined in identity.xml
     private static final String OAUTH_TOKEN_PERSISTENCE_ENABLE = "OAuth.TokenPersistence.Enable";
@@ -127,7 +132,7 @@ public class TokenManagementDAOImpl extends AbstractOAuthDAO implements TokenMan
 
             prepStmt.setString(1, getPersistenceProcessor().getProcessedClientId(consumerKey));
             if (refreshToken != null) {
-                prepStmt.setString(2, getPersistenceProcessor().getProcessedRefreshToken(refreshToken));
+                prepStmt.setString(2, getHashingPersistenceProcessor().getProcessedRefreshToken(refreshToken));
             }
 
             resultSet = prepStmt.executeQuery();
@@ -137,8 +142,12 @@ public class TokenManagementDAOImpl extends AbstractOAuthDAO implements TokenMan
             while (resultSet.next()) {
 
                 if (iterateId == 0) {
-                    validationDataDO.setAccessToken(getPersistenceProcessor().getPreprocessedAccessTokenIdentifier(
-                            resultSet.getString(1)));
+                    if (isHashDisabled) {
+                        validationDataDO.setAccessToken(getPersistenceProcessor().getPreprocessedAccessTokenIdentifier(
+                                resultSet.getString(1)));
+                    } else {
+                        validationDataDO.setAccessToken(resultSet.getString(1));
+                    }
                     String userName = resultSet.getString(2);
                     int tenantId = resultSet.getInt(3);
                     String userDomain = resultSet.getString(4);
@@ -152,19 +161,18 @@ public class TokenManagementDAOImpl extends AbstractOAuthDAO implements TokenMan
                     validationDataDO.setTokenId(resultSet.getString(9));
                     validationDataDO.setGrantType(resultSet.getString(10));
                     String subjectIdentifier = resultSet.getString(11);
-                    AuthenticatedUser user = new AuthenticatedUser();
-                    user.setUserName(userName);
-                    user.setUserStoreDomain(userDomain);
-                    user.setTenantDomain(tenantDomain);
-                    ServiceProvider serviceProvider;
-                    try {
-                        serviceProvider = OAuth2ServiceComponentHolder.getApplicationMgtService().
-                                getServiceProviderByClientId(consumerKey, OAuthConstants.Scope.OAUTH2, tenantDomain);
-                    } catch (IdentityApplicationManagementException e) {
-                        throw new IdentityOAuth2Exception("Error occurred while retrieving OAuth2 " +
-                                "application data for " + "client id " + consumerKey, e);
+                    AuthenticatedUser user = OAuth2Util.createAuthenticatedUser(userName, userDomain, tenantDomain);
+                    user.setAuthenticatedSubjectIdentifier(subjectIdentifier);
+
+                    if (!OAuthServerConfiguration.getInstance().isMapFederatedUsersToLocal() && userDomain.startsWith
+                            (OAuthConstants.UserType.FEDERATED_USER_DOMAIN_PREFIX)) {
+                        if (log.isDebugEnabled()) {
+                            log.debug("Federated prefix found in domain " + userDomain + " and " +
+                                    "federated users are not mapped to local users. " +
+                                    "Hence setting user to a federated user for client id" + consumerKey);
+                        }
+                        user.setFederatedUser(true);
                     }
-                    user.setAuthenticatedSubjectIdentifier(subjectIdentifier, serviceProvider);
                     validationDataDO.setAuthorizedUser(user);
 
                 } else {
@@ -190,6 +198,98 @@ public class TokenManagementDAOImpl extends AbstractOAuthDAO implements TokenMan
         return validationDataDO;
     }
 
+    @Override
+    public AccessTokenDO getRefreshToken(String refreshToken) throws IdentityOAuth2Exception {
+
+        if (log.isDebugEnabled()) {
+            if (IdentityUtil.isTokenLoggable(IdentityConstants.IdentityTokens.REFRESH_TOKEN)) {
+                log.debug("Validating refresh token(hashed): " + DigestUtils.sha256Hex(refreshToken));
+            }
+        }
+
+        AccessTokenDO validationDataDO = null;
+        Connection connection = IdentityDatabaseUtil.getDBConnection();
+        PreparedStatement prepStmt = null;
+        ResultSet resultSet = null;
+
+        String sql = SQLQueries.RETRIEVE_REFRESH_TOKEN;
+
+        try {
+            sql = OAuth2Util.getTokenPartitionedSqlByToken(sql, refreshToken);
+            prepStmt = connection.prepareStatement(sql);
+            prepStmt.setString(1, getHashingPersistenceProcessor().getProcessedRefreshToken(refreshToken));
+            resultSet = prepStmt.executeQuery();
+
+            int iterateId = 0;
+            List<String> scopes = new ArrayList<>();
+            while (resultSet.next()) {
+                if (iterateId == 0) {
+                    String consumerKey = getPersistenceProcessor().getPreprocessedClientId(resultSet.getString(1));
+                    String authorizedUser = resultSet.getString(2);
+                    int tenantId = resultSet.getInt(3);
+                    String tenantDomain = OAuth2Util.getTenantDomain(tenantId);
+                    String userDomain = resultSet.getString(4);
+                    String[] scope = OAuth2Util.buildScopeArray(resultSet.getString(5));
+                    Timestamp accessTokenIssuedTime = resultSet
+                            .getTimestamp(6, Calendar.getInstance(TimeZone.getTimeZone(UTC)));
+                    Timestamp refreshTokenIssuedTime = resultSet.getTimestamp(7,
+                            Calendar.getInstance(TimeZone.getTimeZone(UTC)));
+                    long validityPeriodInMillis = resultSet.getLong(8);
+                    long refreshTokenValidityPeriodMillis = resultSet.getLong(9);
+                    String tokenType = resultSet.getString(10);
+                    String accessTokenIdentifier = resultSet.getString(11);
+                    String tokenId = resultSet.getString(12);
+                    String grantType = resultSet.getString(13);
+                    String subjectIdentifier = resultSet.getString(14);
+
+                    AuthenticatedUser user = new AuthenticatedUser();
+                    user.setUserName(authorizedUser);
+                    user.setUserStoreDomain(userDomain);
+                    user.setTenantDomain(tenantDomain);
+                    ServiceProvider serviceProvider;
+                    try {
+                        serviceProvider = OAuth2ServiceComponentHolder.getApplicationMgtService().
+                                getServiceProviderByClientId(consumerKey, OAuthConstants.Scope.OAUTH2, tenantDomain);
+                    } catch (IdentityApplicationManagementException e) {
+                        throw new IdentityOAuth2Exception("Error occurred while retrieving OAuth2 application data " +
+                                "for client id " + consumerKey, e);
+                    }
+
+                    if (!OAuthServerConfiguration.getInstance().isMapFederatedUsersToLocal() && userDomain.startsWith
+                            (OAuthConstants.UserType.FEDERATED_USER_DOMAIN_PREFIX)) {
+                        if (log.isDebugEnabled()) {
+                            log.debug("Federated prefix found in domain " + userDomain + "and federated users are not" +
+                                    " mapped to local users. Hence setting user to a federated user");
+                        }
+                        user.setFederatedUser(true);
+                    }
+
+                    user.setAuthenticatedSubjectIdentifier(subjectIdentifier, serviceProvider);
+
+                    validationDataDO = new AccessTokenDO(consumerKey, user, scope, accessTokenIssuedTime,
+                            refreshTokenIssuedTime, validityPeriodInMillis, refreshTokenValidityPeriodMillis,
+                            tokenType);
+                    validationDataDO.setAccessToken(accessTokenIdentifier);
+                    validationDataDO.setTokenId(tokenId);
+                    validationDataDO.setGrantType(grantType);
+                    validationDataDO.setTenantID(tenantId);
+                } else {
+                    scopes.add(resultSet.getString(5));
+                }
+                iterateId++;
+            }
+            if (scopes.size() > 0 && validationDataDO != null) {
+                validationDataDO.setScope((String[]) ArrayUtils.addAll(validationDataDO.getScope(),
+                        scopes.toArray(new String[scopes.size()])));
+            }
+        } catch (SQLException e) {
+            throw new IdentityOAuth2Exception("Error while retrieving Refresh Token", e);
+        } finally {
+            IdentityDatabaseUtil.closeAllConnections(connection, resultSet, prepStmt);
+        }
+        return validationDataDO;
+    }
+
     /**
      * This method is to get resource scope key and tenant id of the resource uri
      *
@@ -203,20 +303,27 @@ public class TokenManagementDAOImpl extends AbstractOAuthDAO implements TokenMan
         if (log.isDebugEnabled()) {
             log.debug("Retrieving tenant and scope for resource: " + resourceUri);
         }
-        String sql = SQLQueries.RETRIEVE_SCOPE_WITH_TENANT_FOR_RESOURCE;
-        try (Connection connection = IdentityDatabaseUtil.getDBConnection();
-             PreparedStatement ps = connection.prepareStatement(sql)) {
+        String sql;
+        try (Connection connection = IdentityDatabaseUtil.getDBConnection()) {
 
-            ps.setString(1, resourceUri);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    String scopeName = rs.getString("NAME");
-                    int tenantId = rs.getInt("TENANT_ID");
-                    if (log.isDebugEnabled()) {
-                        log.debug("Found tenant id: " + tenantId + " and scope: " + scopeName + " for resource: " +
-                                resourceUri);
+            if (connection.getMetaData().getDriverName().contains(Oauth2ScopeConstants.DataBaseType.ORACLE)) {
+                sql = SQLQueries.RETRIEVE_SCOPE_WITH_TENANT_FOR_RESOURCE_ORACLE;
+            } else {
+                sql = SQLQueries.RETRIEVE_SCOPE_WITH_TENANT_FOR_RESOURCE;
+            }
+
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setString(1, resourceUri);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        String scopeName = rs.getString("NAME");
+                        int tenantId = rs.getInt("TENANT_ID");
+                        if (log.isDebugEnabled()) {
+                            log.debug("Found tenant id: " + tenantId + " and scope: " + scopeName + " for resource: " +
+                                    resourceUri);
+                        }
+                        return Pair.of(scopeName, tenantId);
                     }
-                    return Pair.of(scopeName, tenantId);
                 }
             }
             return null;
@@ -422,7 +529,7 @@ public class TokenManagementDAOImpl extends AbstractOAuthDAO implements TokenMan
                 // update consumer secret of the oauth app
                 updateStateStatement = connection.prepareStatement
                         (org.wso2.carbon.identity.oauth.dao.SQLQueries.OAuthAppDAOSQLQueries.UPDATE_OAUTH_SECRET_KEY);
-                updateStateStatement.setString(1, newSecretKey);
+                updateStateStatement.setString(1, getPersistenceProcessor().getProcessedClientSecret(newSecretKey));
                 updateStateStatement.setString(2, consumerKey);
                 updateStateStatement.execute();
             }

@@ -21,10 +21,14 @@ package org.wso2.carbon.identity.oauth.cache;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.identity.application.authentication.framework.store.SessionDataStore;
+import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
 import org.wso2.carbon.identity.application.common.cache.BaseCache;
+import org.wso2.carbon.identity.oauth.config.OAuthServerConfiguration;
 import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.dao.OAuthTokenPersistenceFactory;
 import org.wso2.carbon.utils.CarbonUtils;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * Stores authenticated user attributes and OpenID Connect specific attributes during OIDC Authorization request
@@ -68,11 +72,11 @@ public class AuthorizationGrantCache extends BaseCache<AuthorizationGrantCacheKe
     public void addToCacheByToken(AuthorizationGrantCacheKey key, AuthorizationGrantCacheEntry entry) {
         super.addToCache(key, entry);
         String tokenId = entry.getTokenId();
-        if (tokenId != null) {
-            storeToSessionStore(tokenId, entry);
-        } else {
-            storeToSessionStore(replaceFromTokenId(key.getUserAttributesId()), entry);
+        if (tokenId == null) {
+            tokenId = replaceFromTokenId(key.getUserAttributesId());
+            entry.setTokenId(tokenId);
         }
+        storeToSessionStore(tokenId, entry);
 
     }
 
@@ -101,6 +105,16 @@ public class AuthorizationGrantCache extends BaseCache<AuthorizationGrantCacheKe
     }
 
     /**
+     * Clears a cache entry by tokenId
+     *
+     * @param key Key to clear cache.
+     */
+    public void clearCacheEntryByTokenId(AuthorizationGrantCacheKey key, String tokenId) {
+        super.clearCacheEntry(key);
+        clearFromSessionStore(tokenId);
+    }
+
+    /**
      * Add a cache entry by authorization code.
      *
      * @param key   Key which cache entry is indexed.
@@ -108,6 +122,9 @@ public class AuthorizationGrantCache extends BaseCache<AuthorizationGrantCacheKe
      */
     public void addToCacheByCode(AuthorizationGrantCacheKey key, AuthorizationGrantCacheEntry entry) {
         super.addToCache(key, entry);
+        long validityPeriodNano = TimeUnit.SECONDS.toNanos(
+                OAuthServerConfiguration.getInstance().getAuthorizationCodeValidityPeriodInSeconds());
+        entry.setValidityPeriod(validityPeriodNano);
         storeToSessionStore(entry.getCodeId(), entry);
     }
 

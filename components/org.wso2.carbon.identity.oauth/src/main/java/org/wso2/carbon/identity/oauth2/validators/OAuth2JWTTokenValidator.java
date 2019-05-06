@@ -19,10 +19,10 @@
 package org.wso2.carbon.identity.oauth2.validators;
 
 import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.ReadOnlyJWSHeader;
 import com.nimbusds.jose.crypto.RSASSAVerifier;
-import com.nimbusds.jwt.ReadOnlyJWTClaimsSet;
+import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
@@ -53,13 +53,19 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
     private static final String ALGO_PREFIX = "RS";
     private static final Log log = LogFactory.getLog(OAuth2JWTTokenValidator.class);
     private static final String OIDC_IDP_ENTITY_ID = "IdPEntityId";
+    private static final String DOT_SEPARATOR = ".";
 
     @Override
     public boolean validateAccessToken(OAuth2TokenValidationMessageContext validationReqDTO)
             throws IdentityOAuth2Exception {
+
+        if (!isJWT(validationReqDTO.getRequestDTO().getAccessToken().getIdentifier())) {
+            return false;
+        }
+
         try {
             SignedJWT signedJWT = getSignedJWT(validationReqDTO);
-            ReadOnlyJWTClaimsSet claimsSet = signedJWT.getJWTClaimsSet();
+            JWTClaimsSet claimsSet = signedJWT.getJWTClaimsSet();
             if (claimsSet == null) {
                 throw new IdentityOAuth2Exception("Claim values are empty in the given Token.");
             }
@@ -70,12 +76,20 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
             if (!validateSignature(signedJWT, identityProvider)) {
                 return false;
             }
-            checkExpirationTime(claimsSet.getExpirationTime());
+            if (!checkExpirationTime(claimsSet.getExpirationTime())) {
+                return false;
+            }
             checkNotBeforeTime(claimsSet.getNotBeforeTime());
         } catch (JOSEException | ParseException e) {
             throw new IdentityOAuth2Exception("Error while validating Token.", e);
         }
         return true;
+    }
+
+    @Override
+    public String getTokenType() {
+
+        return "JWT";
     }
 
     /**
@@ -88,7 +102,7 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
      * @return the resolved X509 Certificate, to be used to validate the JWT signature.
      * @throws IdentityOAuth2Exception something goes wrong.
      */
-    protected X509Certificate resolveSignerCertificate(ReadOnlyJWSHeader header,
+    protected X509Certificate resolveSignerCertificate(JWSHeader header,
                                                        IdentityProvider idp) throws IdentityOAuth2Exception {
         X509Certificate x509Certificate;
         String tenantDomain = getTenantDomain();
@@ -106,7 +120,7 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
         return SignedJWT.parse(validationReqDTO.getRequestDTO().getAccessToken().getIdentifier());
     }
 
-    private String resolveSubject(ReadOnlyJWTClaimsSet claimsSet) {
+    private String resolveSubject(JWTClaimsSet claimsSet) {
         return claimsSet.getSubject();
     }
 
@@ -140,7 +154,7 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
             throws JOSEException, IdentityOAuth2Exception {
 
         JWSVerifier verifier = null;
-        ReadOnlyJWSHeader header = signedJWT.getHeader();
+        JWSHeader header = signedJWT.getHeader();
         X509Certificate x509Certificate = resolveSignerCertificate(header, idp);
         if (x509Certificate == null) {
             throw new IdentityOAuth2Exception("Unable to locate certificate for Identity Provider: " + idp
@@ -180,7 +194,7 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
         return isValid;
     }
 
-    private boolean checkExpirationTime(Date expirationTime) throws IdentityOAuth2Exception {
+    private boolean checkExpirationTime(Date expirationTime) {
         long timeStampSkewMillis = OAuthServerConfiguration.getInstance().getTimeStampSkewInSeconds() * 1000;
         long expirationTimeInMillis = expirationTime.getTime();
         long currentTimeInMillis = System.currentTimeMillis();
@@ -191,7 +205,7 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
                         ", TimeStamp Skew : " + timeStampSkewMillis +
                         ", Current Time : " + currentTimeInMillis + ". Token Rejected and validation terminated.");
             }
-            throw new IdentityOAuth2Exception("Token is expired.");
+            return false;
         }
 
         if (log.isDebugEnabled()) {
@@ -222,7 +236,7 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
         return true;
     }
 
-    private boolean validateRequiredFields(ReadOnlyJWTClaimsSet claimsSet) throws IdentityOAuth2Exception {
+    private boolean validateRequiredFields(JWTClaimsSet claimsSet) throws IdentityOAuth2Exception {
 
         String subject = resolveSubject(claimsSet);
         List<String> audience = claimsSet.getAudience();
@@ -241,5 +255,16 @@ public class OAuth2JWTTokenValidator extends DefaultOAuth2TokenValidator {
             tenantDomain = MultitenantConstants.SUPER_TENANT_DOMAIN_NAME;
         }
         return tenantDomain;
+    }
+
+    /**
+     * Return true if the token identifier is JWT.
+     *
+     * @param tokenIdentifier String JWT token identifier.
+     * @return  true for a JWT token.
+     */
+    private boolean isJWT(String tokenIdentifier) {
+        // JWT token contains 3 base64 encoded components separated by periods.
+        return StringUtils.countMatches(tokenIdentifier, DOT_SEPARATOR) == 2;
     }
 }

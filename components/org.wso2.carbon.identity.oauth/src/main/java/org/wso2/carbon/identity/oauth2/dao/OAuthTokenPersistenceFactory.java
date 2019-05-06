@@ -19,6 +19,12 @@
  */
 
 package org.wso2.carbon.identity.oauth2.dao;
+
+import org.wso2.carbon.identity.openidconnect.dao.CacheBackedScopeClaimMappingDAOImpl;
+import org.wso2.carbon.identity.openidconnect.dao.ScopeClaimMappingDAO;
+import org.wso2.carbon.identity.openidconnect.dao.RequestObjectDAO;
+import org.wso2.carbon.identity.openidconnect.dao.RequestObjectDAOImpl;
+
 /*
 NOTE
 This is the very first step of moving to simplified architecture for token persistence. New set of DAO classes  for
@@ -33,6 +39,8 @@ public class OAuthTokenPersistenceFactory {
     private AccessTokenDAO tokenDAO;
     private OAuthScopeDAO scopeDAO;
     private TokenManagementDAO managementDAO;
+    private RequestObjectDAO requestObjectDAO;
+    private ScopeClaimMappingDAO scopeClaimMappingDAO;
 
     public OAuthTokenPersistenceFactory() {
 
@@ -40,6 +48,8 @@ public class OAuthTokenPersistenceFactory {
         this.tokenDAO = new AccessTokenDAOImpl();
         this.scopeDAO = new OAuthScopeDAOImpl();
         this.managementDAO = new TokenManagementDAOImpl();
+        this.requestObjectDAO = new RequestObjectDAOImpl();
+        this.scopeClaimMappingDAO = new CacheBackedScopeClaimMappingDAOImpl();
     }
 
     public static OAuthTokenPersistenceFactory getInstance() {
@@ -68,5 +78,15 @@ public class OAuthTokenPersistenceFactory {
     public TokenManagementDAO getTokenManagementDAO() {
 
         return managementDAO;
+    }
+
+    public RequestObjectDAO getRequestObjectDAO() {
+
+        return requestObjectDAO;
+    }
+
+    public ScopeClaimMappingDAO getScopeClaimMappingDAO() {
+
+        return scopeClaimMappingDAO;
     }
 }

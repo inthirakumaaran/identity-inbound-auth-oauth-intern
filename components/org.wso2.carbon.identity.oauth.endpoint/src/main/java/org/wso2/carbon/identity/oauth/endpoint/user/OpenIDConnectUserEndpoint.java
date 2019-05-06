@@ -18,7 +18,6 @@
 
 package org.wso2.carbon.identity.oauth.endpoint.user;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.oltu.oauth2.as.response.OAuthASResponse;
@@ -27,19 +26,16 @@ import org.apache.oltu.oauth2.common.exception.OAuthSystemException;
 import org.apache.oltu.oauth2.common.message.OAuthResponse;
 import org.wso2.carbon.identity.oauth.common.OAuth2ErrorCodes;
 import org.wso2.carbon.identity.oauth.common.OAuthConstants;
-import org.wso2.carbon.identity.oauth.common.exception.InvalidOAuthClientException;
-import org.wso2.carbon.identity.oauth.dao.OAuthAppDO;
 import org.wso2.carbon.identity.oauth.endpoint.user.impl.UserInfoEndpointConfig;
 import org.wso2.carbon.identity.oauth.user.UserInfoAccessTokenValidator;
 import org.wso2.carbon.identity.oauth.user.UserInfoEndpointException;
 import org.wso2.carbon.identity.oauth.user.UserInfoRequestValidator;
 import org.wso2.carbon.identity.oauth.user.UserInfoResponseBuilder;
-import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2TokenValidationResponseDTO;
-import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.ws.rs.Consumes;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
@@ -60,6 +56,7 @@ public class OpenIDConnectUserEndpoint {
 
     @GET
     @Path("/")
+    @Consumes("application/x-www-form-urlencoded")
     @Produces("application/json")
     public Response getUserClaims(@Context HttpServletRequest request) throws OAuthSystemException {
         String userInfoResponse;
@@ -95,6 +92,7 @@ public class OpenIDConnectUserEndpoint {
 
     @POST
     @Path("/")
+    @Consumes("application/x-www-form-urlencoded")
     @Produces("application/json")
     public Response getUserClaimsPost(@Context HttpServletRequest request) throws OAuthSystemException {
         return getUserClaims(request);

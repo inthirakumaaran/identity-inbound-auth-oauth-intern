@@ -16,6 +16,8 @@
 package org.wso2.carbon.identity.oauth2.authcontext;
 
 import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jwt.JWT;
+import com.nimbusds.jwt.JWTParser;
 import org.mockito.internal.util.reflection.Whitebox;
 import org.testng.Assert;
 import org.testng.annotations.AfterTest;
@@ -46,6 +48,7 @@ import java.lang.reflect.Modifier;
 import java.security.Key;
 import java.security.cert.Certificate;
 import java.sql.Timestamp;
+import java.util.Date;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,6 +68,7 @@ public class JWTTokenGeneratorTest extends PowerMockIdentityBaseTest {
     private OAuth2TokenValidationRequestDTO oAuth2TokenValidationRequestDTO;
     private OAuth2TokenValidationResponseDTO oAuth2TokenValidationResponseDTO;
     private OAuth2TokenValidationMessageContext oAuth2TokenValidationMessageContext;
+    private OAuth2TokenValidationRequestDTO.OAuth2AccessToken accessToken;
 
     private JWTTokenGenerator jwtTokenGenerator;
     private boolean includeClaims = true;
@@ -85,6 +89,8 @@ public class JWTTokenGeneratorTest extends PowerMockIdentityBaseTest {
                 mock(OAuth2TokenValidationRequestDTO.TokenValidationContextParam.class);
         tokenValidationContextParam.setKey("sampleKey");
         tokenValidationContextParam.setValue("sampleValue");
+
+        accessToken = oAuth2TokenValidationRequestDTO.new OAuth2AccessToken();
 
         OAuth2TokenValidationRequestDTO.TokenValidationContextParam[]
                 tokenValidationContextParams = {tokenValidationContextParam};
@@ -134,6 +140,10 @@ public class JWTTokenGeneratorTest extends PowerMockIdentityBaseTest {
         privateKeys.put(-1234, ReadCertStoreSampleUtil.createKeyStore(getClass())
                                                       .getKey("wso2carbon", "wso2carbon".toCharArray()));
         setFinalStatic(OAuth2Util.class.getDeclaredField("privateKeys"), privateKeys);
+
+        accessToken.setTokenType("Bearer");
+        oAuth2TokenValidationRequestDTO.setAccessToken(accessToken);
+
         jwtTokenGenerator.generateToken(oAuth2TokenValidationMessageContext);
 
         Assert.assertNotNull(oAuth2TokenValidationMessageContext.getResponseDTO().getAuthorizationContextToken()
@@ -141,6 +151,15 @@ public class JWTTokenGeneratorTest extends PowerMockIdentityBaseTest {
         Assert.assertEquals(oAuth2TokenValidationMessageContext.getResponseDTO().getAuthorizationContextToken()
                                                                .getTokenType(), "JWT");
 
+    }
+
+    @Test(dependsOnMethods = "testGenerateToken")
+    public void testNbfClaimInJWT() throws Exception {
+        String tokenString = oAuth2TokenValidationMessageContext.getResponseDTO().getAuthorizationContextToken()
+                                                                .getTokenString();
+        JWT jwt = JWTParser.parse(tokenString);
+        Date notBeforeTime = jwt.getJWTClaimsSet().getNotBeforeTime();
+        Assert.assertTrue(notBeforeTime.compareTo(new Date()) <= 0);
     }
 
     @Test(dependsOnMethods = "testGenerateToken")

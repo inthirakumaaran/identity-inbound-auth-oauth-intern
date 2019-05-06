@@ -31,6 +31,7 @@ import org.wso2.carbon.identity.oauth2.Oauth2ScopeConstants;
 import org.wso2.carbon.identity.oauth2.bean.Scope;
 import org.wso2.carbon.identity.oauth2.util.NamedPreparedStatement;
 import org.wso2.carbon.identity.oauth2.util.Oauth2ScopeUtils;
+import org.wso2.carbon.utils.DBUtils;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -104,19 +105,29 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
         Set<Scope> scopes = new HashSet<>();
         Map<Integer, Scope> scopeMap = new HashMap<>();
 
+        String sql;
+
         try (Connection conn = IdentityDatabaseUtil.getDBConnection()) {
 
-            try (PreparedStatement ps = conn.prepareStatement(SQLQueries.RETRIEVE_ALL_SCOPES)) {
+            if (conn.getMetaData().getDriverName().contains(Oauth2ScopeConstants.DataBaseType.ORACLE)) {
+                sql = SQLQueries.RETRIEVE_ALL_SCOPES_ORACLE;
+            } else {
+                sql = SQLQueries.RETRIEVE_ALL_SCOPES;
+            }
+
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setInt(1, tenantID);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         int scopeID = rs.getInt(1);
                         String name = rs.getString(2);
-                        String description = rs.getString(3);
-                        final String binding = rs.getString(4);
+                        String displayName = rs.getString(3);
+                        String description = rs.getString(4);
+                        final String binding = rs.getString(5);
                         if (scopeMap.containsKey(scopeID) && scopeMap.get(scopeID) != null) {
                             scopeMap.get(scopeID).setName(name);
                             scopeMap.get(scopeID).setDescription(description);
+                            scopeMap.get(scopeID).setDisplayName(displayName);
                             if (binding != null) {
                                 if (scopeMap.get(scopeID).getBindings() != null) {
                                     scopeMap.get(scopeID).addBinding(binding);
@@ -127,7 +138,7 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
                                 }
                             }
                         } else {
-                            scopeMap.put(scopeID, new Scope(name, description, new ArrayList<String>()));
+                            scopeMap.put(scopeID, new Scope(name, displayName, description, new ArrayList<String>()));
                             if (binding != null) {
                                 scopeMap.get(scopeID).addBinding(binding);
                             }
@@ -196,11 +207,13 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
                     while (rs.next()) {
                         int scopeID = rs.getInt(1);
                         String name = rs.getString(2);
-                        String description = rs.getString(3);
-                        final String binding = rs.getString(4);
+                        String displayName = rs.getString(3);
+                        String description = rs.getString(4);
+                        final String binding = rs.getString(5);
                         if (scopeMap.containsKey(scopeID) && scopeMap.get(scopeID) != null) {
                             scopeMap.get(scopeID).setName(name);
                             scopeMap.get(scopeID).setDescription(description);
+                            scopeMap.get(scopeID).setDisplayName(displayName);
                             if (binding != null) {
                                 if (scopeMap.get(scopeID).getBindings() != null) {
                                     scopeMap.get(scopeID).addBinding(binding);
@@ -211,7 +224,7 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
                                 }
                             }
                         } else {
-                            scopeMap.put(scopeID, new Scope(name, description, new ArrayList<String>()));
+                            scopeMap.put(scopeID, new Scope(name, displayName, description, new ArrayList<String>()));
                             if (binding != null) {
                                 scopeMap.get(scopeID).addBinding(binding);
 
@@ -247,28 +260,37 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
         }
 
         Scope scope = null;
+        String sql;
 
         try (Connection conn = IdentityDatabaseUtil.getDBConnection()) {
-
-            try (PreparedStatement ps = conn.prepareStatement(SQLQueries.RETRIEVE_SCOPE_BY_NAME)) {
+            if (conn.getMetaData().getDriverName().contains(Oauth2ScopeConstants.DataBaseType.ORACLE)) {
+                sql = SQLQueries.RETRIEVE_SCOPE_BY_NAME_ORACLE;
+            } else {
+                sql = SQLQueries.RETRIEVE_SCOPE_BY_NAME;
+            }
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, name);
                 ps.setInt(2, tenantID);
                 try (ResultSet rs = ps.executeQuery()) {
 
                     String description = null;
+                    String displayName = null;
                     List<String> bindings = new ArrayList<>();
 
                     while (rs.next()) {
                         if (StringUtils.isBlank(description)) {
                             description = rs.getString(2);
                         }
-                        if (StringUtils.isNotBlank(rs.getString(3))) {
-                            bindings.add(rs.getString(3));
+                        if (StringUtils.isBlank(displayName)) {
+                            displayName = rs.getString(3);
+                        }
+                        if (StringUtils.isNotBlank(rs.getString(4))) {
+                            bindings.add(rs.getString(4));
                         }
                     }
 
                     if (StringUtils.isNotBlank(name) && StringUtils.isNotBlank(description)) {
-                        scope = new Scope(name, description, bindings);
+                        scope = new Scope(name, displayName, description, bindings);
                     }
                 }
             }
@@ -388,10 +410,13 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
         //Adding the scope
         if (scope != null) {
             int scopeID = 0;
-            try (PreparedStatement ps = conn.prepareStatement(SQLQueries.ADD_SCOPE)) {
+            String dbProductName = conn.getMetaData().getDatabaseProductName();
+            try (PreparedStatement ps = conn.prepareStatement(SQLQueries.ADD_SCOPE, new String[]{
+                    DBUtils.getConvertedAutoGeneratedColumnName(dbProductName, Oauth2ScopeConstants.SCOPE_ID)})) {
                 ps.setString(1, scope.getName());
-                ps.setString(2, scope.getDescription());
-                ps.setInt(3, tenantID);
+                ps.setString(2, scope.getDisplayName());
+                ps.setString(3, scope.getDescription());
+                ps.setInt(4, tenantID);
                 ps.execute();
 
                 try (ResultSet rs = ps.getGeneratedKeys()) {
@@ -453,17 +478,22 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
         if (log.isDebugEnabled()) {
             log.debug("Retrieving scope for resource: " + resourceUri);
         }
-        String sql = SQLQueries.RETRIEVE_SCOPE_NAME_FOR_RESOURCE;
-        try (Connection connection = IdentityDatabaseUtil.getDBConnection();
-             PreparedStatement ps = connection.prepareStatement(sql);) {
-
-            ps.setString(1, resourceUri);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getString("NAME");
-                }
+        String sql;
+        try (Connection connection = IdentityDatabaseUtil.getDBConnection()) {
+            if (connection.getMetaData().getDriverName().contains(Oauth2ScopeConstants.DataBaseType.ORACLE)) {
+                sql = SQLQueries.RETRIEVE_SCOPE_NAME_FOR_RESOURCE_ORACLE;
+            } else {
+                sql = SQLQueries.RETRIEVE_SCOPE_NAME_FOR_RESOURCE;
             }
-            return null;
+            try(PreparedStatement ps = connection.prepareStatement(sql)) {
+                ps.setString(1, resourceUri);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getString("NAME");
+                    }
+                }
+                return null;
+            }
         } catch (SQLException e) {
             String errorMsg = "Error getting scopes for resource - " + resourceUri + " : " + e.getMessage();
             throw new IdentityOAuth2Exception(errorMsg, e);
@@ -496,9 +526,15 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
         PreparedStatement ps = null;
         ResultSet rs = null;
         Set<String> bindings = new HashSet<>();
+        String sql;
 
         try {
-            String sql = SQLQueries.RETRIEVE_BINDINGS_OF_SCOPE_FOR_TENANT;
+
+            if (connection.getMetaData().getDriverName().contains(Oauth2ScopeConstants.DataBaseType.ORACLE)) {
+                sql = SQLQueries.RETRIEVE_BINDINGS_OF_SCOPE_FOR_TENANT_ORACLE;
+            } else {
+                sql = SQLQueries.RETRIEVE_BINDINGS_OF_SCOPE_FOR_TENANT;
+            }
 
             ps = connection.prepareStatement(sql);
             ps.setString(1, scopeName);
@@ -507,7 +543,7 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
 
             while (rs.next()) {
                 String binding = rs.getString("SCOPE_BINDING");
-                if (!binding.isEmpty()) {
+                if (StringUtils.isNotEmpty(binding)) {
                     bindings.add(binding);
                 }
             }
@@ -548,9 +584,14 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
         PreparedStatement ps = null;
         ResultSet rs = null;
         Set<String> bindings = new HashSet<>();
+        String sql;
 
         try {
-            String sql = SQLQueries.RETRIEVE_BINDINGS_OF_SCOPE;
+            if (connection.getMetaData().getDriverName().contains(Oauth2ScopeConstants.DataBaseType.ORACLE)) {
+                sql = SQLQueries.RETRIEVE_BINDINGS_OF_SCOPE_ORACLE;
+            } else {
+                sql = SQLQueries.RETRIEVE_BINDINGS_OF_SCOPE;
+            }
 
             ps = connection.prepareStatement(sql);
             ps.setString(1, scopeName);
@@ -558,7 +599,7 @@ public class OAuthScopeDAOImpl implements OAuthScopeDAO {
 
             while (rs.next()) {
                 String binding = rs.getString("SCOPE_BINDING");
-                if (!binding.isEmpty()) {
+                if (StringUtils.isNotBlank(binding)) {
                     bindings.add(binding);
                 }
             }

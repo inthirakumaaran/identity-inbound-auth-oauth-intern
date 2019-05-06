@@ -17,16 +17,31 @@
 package org.wso2.carbon.identity.openidconnect;
 
 import org.apache.commons.lang.StringUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.identity.application.authentication.framework.exception.FrameworkException;
+import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedUser;
+import org.wso2.carbon.identity.application.common.model.FederatedAuthenticatorConfig;
+import org.wso2.carbon.identity.application.common.model.IdentityProvider;
 import org.wso2.carbon.identity.application.common.model.RoleMapping;
 import org.wso2.carbon.identity.application.common.model.ServiceProvider;
+import org.wso2.carbon.identity.application.common.util.IdentityApplicationConstants;
+import org.wso2.carbon.identity.application.common.util.IdentityApplicationManagementUtil;
+import org.wso2.carbon.identity.base.IdentityConstants;
+import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.oauth.cache.AuthorizationGrantCache;
 import org.wso2.carbon.identity.oauth.cache.AuthorizationGrantCacheEntry;
 import org.wso2.carbon.identity.oauth.cache.AuthorizationGrantCacheKey;
+import org.wso2.carbon.identity.oauth.config.OAuthServerConfiguration;
+import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
+import org.wso2.carbon.identity.openidconnect.internal.OpenIDConnectServiceComponentHolder;
+import org.wso2.carbon.idp.mgt.IdentityProviderManagementException;
+import org.wso2.carbon.idp.mgt.IdentityProviderManager;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.commons.collections.CollectionUtils.isNotEmpty;
 import static org.apache.commons.lang.ArrayUtils.isNotEmpty;
@@ -36,6 +51,9 @@ import static org.apache.commons.lang.StringUtils.isNotBlank;
  * Utility to handle OIDC Claim related functionality.
  */
 public class OIDCClaimUtil {
+
+    private static Log log = LogFactory.getLog(OIDCClaimUtil.class);
+    private static final String OPENID_IDP_ENTITY_ID = "IdPEntityId";
 
     private OIDCClaimUtil() {
     }
@@ -86,5 +104,47 @@ public class OIDCClaimUtil {
 
     private static String getLocalRoleName(RoleMapping roleMapping) {
         return roleMapping.getLocalRole().getLocalRoleName();
+    }
+
+    public static Map<String, Object> filterUserClaimsBasedOnConsent(Map<String, Object> userClaims,
+                                                                     AuthenticatedUser authenticatedUser,
+                                                                     String clientId,
+                                                                     String spTenantDomain,
+                                                                     String grantType) {
+
+        if (isConsentBasedClaimFilteringApplicable(grantType)) {
+            return OpenIDConnectServiceComponentHolder.getInstance()
+                    .getHighestPriorityOpenIDConnectClaimFilter()
+                    .getClaimsFilteredByUserConsent(userClaims, authenticatedUser, clientId, spTenantDomain);
+        } else {
+            if (log.isDebugEnabled()) {
+                String msg = "Filtering user claims based on consent skipped for grant type:%s. Returning original " +
+                        "user claims for user:%s, for clientId:%s of tenantDomain:%s";
+                log.debug(String.format(msg, grantType, authenticatedUser.toFullQualifiedUsername(),
+                        clientId, spTenantDomain));
+            }
+            return userClaims;
+        }
+    }
+
+    private static boolean isConsentBasedClaimFilteringApplicable(String grantType) {
+
+        return isOIDCConsentPageNotSkipped() && isUserConsentRequiredForClaims(grantType);
+    }
+
+    private static boolean isOIDCConsentPageNotSkipped() {
+
+        return !OAuthServerConfiguration.getInstance().getOpenIDConnectSkipeUserConsentConfig();
+    }
+
+    /**
+     * Check whether user consent based claim filtering is applicable for the grant type.
+     *
+     * @param grantType
+     * @return
+     */
+    private static boolean isUserConsentRequiredForClaims(String grantType) {
+
+        return OAuthServerConfiguration.getInstance().isUserConsentRequiredForClaims(grantType);
     }
 }

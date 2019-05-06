@@ -19,10 +19,12 @@
 package org.wso2.carbon.identity.oauth2.token;
 
 import org.apache.commons.codec.digest.DigestUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.oltu.oauth2.common.error.OAuthError;
 import org.apache.oltu.oauth2.common.message.types.GrantType;
+import org.owasp.encoder.Encode;
 import org.wso2.carbon.identity.base.IdentityConstants;
 import org.wso2.carbon.identity.base.IdentityException;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
@@ -40,19 +42,20 @@ import org.wso2.carbon.identity.oauth.internal.OAuthComponentServiceHolder;
 import org.wso2.carbon.identity.oauth2.IDTokenValidationFailureException;
 import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.ResponseHeader;
+import org.wso2.carbon.identity.oauth2.bean.OAuthClientAuthnContext;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenReqDTO;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenRespDTO;
-import org.wso2.carbon.identity.oauth2.token.handlers.clientauth.ClientAuthenticationHandler;
 import org.wso2.carbon.identity.oauth2.token.handlers.grant.AuthorizationGrantHandler;
 import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
 import org.wso2.carbon.identity.openidconnect.IDTokenBuilder;
 import org.wso2.carbon.utils.CarbonUtils;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Hashtable;
-import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import static org.wso2.carbon.identity.oauth.common.OAuthConstants.OauthAppStates.APP_STATE_ACTIVE;
 
 /**
  * This class is used to issue access tokens and refresh tokens.
@@ -63,9 +66,8 @@ public class AccessTokenIssuer {
     private static Log log = LogFactory.getLog(AccessTokenIssuer.class);
     private Map<String, AuthorizationGrantHandler> authzGrantHandlers =
             new Hashtable<String, AuthorizationGrantHandler>();
-    private List<ClientAuthenticationHandler> clientAuthenticationHandlers =
-            new ArrayList<ClientAuthenticationHandler>();
     private AppInfoCache appInfoCache;
+    public static final String OAUTH_APP_DO = "OAuthAppDO";
 
     /**
      * Private constructor which will not allow to create objects of this class from outside
@@ -73,7 +75,6 @@ public class AccessTokenIssuer {
     private AccessTokenIssuer() throws IdentityOAuth2Exception {
 
         authzGrantHandlers = OAuthServerConfiguration.getInstance().getSupportedGrantTypes();
-        clientAuthenticationHandlers = OAuthServerConfiguration.getInstance().getSupportedClientAuthHandlers();
         appInfoCache = AppInfoCache.getInstance();
         if (appInfoCache != null) {
             if (log.isDebugEnabled()) {
@@ -120,85 +121,77 @@ public class AccessTokenIssuer {
 
         AuthorizationGrantHandler authzGrantHandler = authzGrantHandlers.get(grantType);
 
+        OAuthTokenReqMessageContext tokReqMsgCtx = new OAuthTokenReqMessageContext(tokenReqDTO);
+        boolean isRefreshRequest = GrantType.REFRESH_TOKEN.toString().equals(grantType);
+
+        triggerPreListeners(tokenReqDTO, tokReqMsgCtx, isRefreshRequest);
+
+        OAuthClientAuthnContext oAuthClientAuthnContext = tokenReqDTO.getoAuthClientAuthnContext();
+
+        if (oAuthClientAuthnContext == null) {
+            oAuthClientAuthnContext = new OAuthClientAuthnContext();
+            oAuthClientAuthnContext.setAuthenticated(false);
+            oAuthClientAuthnContext.setErrorMessage("Client Authentication Failed");
+            oAuthClientAuthnContext.setErrorCode(OAuthError.TokenResponse.INVALID_REQUEST);
+        }
+
+        // Will return an invalid request response if multiple authentication mechanisms are engaged irrespective of
+        // whether the grant type is confidential or not.
+        if (oAuthClientAuthnContext.isMultipleAuthenticatorsEngaged()) {
+            tokenRespDTO = handleError(OAuth2ErrorCodes.INVALID_REQUEST, "The client MUST NOT use more than one " +
+                    "authentication method in each", tokenReqDTO);
+            setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
+            triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
+            return tokenRespDTO;
+        }
+
+        boolean isAuthenticated = oAuthClientAuthnContext.isAuthenticated();
+
+        if (authzGrantHandler == null) {
+            String errorMsg = "Unsupported grant type : " + grantType + ", is used.";
+            if (log.isDebugEnabled()) {
+                log.debug(errorMsg);
+            }
+            tokenRespDTO = handleError(OAuthError.TokenResponse.UNSUPPORTED_GRANT_TYPE,
+                    errorMsg, tokenReqDTO);
+            setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
+            triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
+            return tokenRespDTO;
+        }
+
+        // If the client is not confidential then there is no need to authenticate the client.
+        if (!authzGrantHandler.isConfidentialClient() && StringUtils.isNotEmpty
+                (oAuthClientAuthnContext.getClientId())) {
+            isAuthenticated = true;
+        }
+
+        if (!isAuthenticated && !oAuthClientAuthnContext.isPreviousAuthenticatorEngaged() && authzGrantHandler
+                .isConfidentialClient()) {
+            tokenRespDTO = handleError(
+                    OAuth2ErrorCodes.INVALID_CLIENT,
+                    "Unsupported Client Authentication Method!", tokenReqDTO);
+            setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
+            triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
+            return tokenRespDTO;
+        }
+        if (!isAuthenticated) {
+            tokenRespDTO = handleError(
+                    oAuthClientAuthnContext.getErrorCode(),
+                    oAuthClientAuthnContext.getErrorMessage(), tokenReqDTO);
+            setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
+            triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
+            return tokenRespDTO;
+        }
+
         // loading the stored application data
-        OAuthAppDO oAuthAppDO = OAuth2Util.getAppInformationByClientId(tokenReqDTO.getClientId());
+        OAuthAppDO oAuthAppDO = getOAuthApplication(tokenReqDTO.getClientId());
 
         // set the tenantDomain of the SP in the tokenReqDTO
         // indirectly we can say that the tenantDomain of the SP is the tenantDomain of the user who created SP
         // this is done to avoid having to send the tenantDomain as a query param to the token endpoint
         tokenReqDTO.setTenantDomain(OAuth2Util.getTenantDomainOfOauthApp(oAuthAppDO));
 
-        OAuthTokenReqMessageContext tokReqMsgCtx = new OAuthTokenReqMessageContext(tokenReqDTO);
-        tokReqMsgCtx.addProperty("OAuthAppDO", oAuthAppDO);
-        boolean isRefreshRequest = GrantType.REFRESH_TOKEN.toString().equals(grantType);
-
-        triggerPreListeners(tokenReqDTO, tokReqMsgCtx, isRefreshRequest);
-
-        // If multiple client authentication methods have been used the authorization server must reject the request
-        int authenticatorHandlerIndex = -1;
-        for (int i = 0; i < clientAuthenticationHandlers.size(); i++) {
-            if (clientAuthenticationHandlers.get(i).canAuthenticate(tokReqMsgCtx)) {
-                if (authenticatorHandlerIndex > -1) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("Multiple Client Authentication Methods used for client id : " +
-                                tokenReqDTO.getClientId());
-                    }
-                    tokenRespDTO = handleError(
-                            OAuthError.TokenResponse.INVALID_REQUEST,
-                            "Multiple Client Authentication Methods used for authenticating the client.",
-                            tokenReqDTO);
-                    setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
-                    triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
-                    return tokenRespDTO;
-                }
-                authenticatorHandlerIndex = i;
-            }
-        }
-
-        if (authzGrantHandler == null) {
-            if (log.isDebugEnabled()) {
-                log.debug("Unsupported grant type for client Id : " + tokenReqDTO.getClientId());
-            }
-            tokenRespDTO = handleError(OAuthError.TokenResponse.UNSUPPORTED_GRANT_TYPE,
-                    "Unsupported grant type " + grantType + " is used.", tokenReqDTO);
-            setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
-            triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
-            return tokenRespDTO;
-        }
-
-        if (authenticatorHandlerIndex < 0 && authzGrantHandler.isConfidentialClient()) {
-            if (log.isDebugEnabled()) {
-                log.debug("Confidential client cannot be authenticated for client id : " +
-                        tokenReqDTO.getClientId());
-            }
-            tokenRespDTO = handleError(
-                    OAuthConstants.OAuthError.TokenResponse.UNSUPPORTED_CLIENT_AUTHENTICATION_METHOD,
-                    "Unsupported Client Authentication Method!", tokenReqDTO);
-            setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
-            triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
-            return tokenRespDTO;
-        }
-
-        ClientAuthenticationHandler clientAuthHandler = null;
-        if (authenticatorHandlerIndex > -1) {
-            clientAuthHandler = clientAuthenticationHandlers.get(authenticatorHandlerIndex);
-        }
-        boolean isAuthenticated;
-        if (clientAuthHandler != null) {
-            isAuthenticated = clientAuthHandler.authenticateClient(tokReqMsgCtx);
-        } else {
-            isAuthenticated = true;
-        }
-        if (!isAuthenticated) {
-            if (log.isDebugEnabled()) {
-                log.debug("Client Authentication failed for client Id: " + tokenReqDTO.getClientId());
-            }
-            tokenRespDTO = handleError(OAuthError.TokenResponse.INVALID_CLIENT,
-                    "Client credentials are invalid.", tokenReqDTO);
-            setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
-            triggerPostListeners(tokenReqDTO, tokenRespDTO, tokReqMsgCtx, isRefreshRequest);
-            return tokenRespDTO;
-        }
+        tokReqMsgCtx.addProperty(OAUTH_APP_DO, oAuthAppDO);
 
         if (!authzGrantHandler.isOfTypeApplicationUser()) {
             tokReqMsgCtx.setAuthorizedUser(oAuthAppDO.getUser());
@@ -221,7 +214,7 @@ public class AccessTokenIssuer {
 
             if (log.isDebugEnabled()) {
                 log.debug("Client Id: " + tokenReqDTO.getClientId() + " is not authorized to use grant type: " +
-                        tokenReqDTO.getGrantType());
+                        grantType);
             }
             tokenRespDTO = handleError(OAuthError.TokenResponse.UNAUTHORIZED_CLIENT, error, tokenReqDTO);
             setResponseHeaders(tokReqMsgCtx, tokenRespDTO);
@@ -326,8 +319,10 @@ public class AccessTokenIssuer {
             }
         }
 
-        if (tokenReqDTO.getGrantType().equals(GrantType.AUTHORIZATION_CODE.toString())) {
-            addUserAttributesToCache(tokenReqDTO, tokenRespDTO);
+        if (GrantType.AUTHORIZATION_CODE.toString().equals(grantType)) {
+            addUserAttributesAgainstAccessToken(tokenReqDTO, tokenRespDTO);
+            // Cache entry against the authorization code has no value beyond the token request.
+            clearCacheEntryAgainstAuthorizationCode(getAuthorizationCode(tokenReqDTO));
         }
 
         return tokenRespDTO;
@@ -393,14 +388,16 @@ public class AccessTokenIssuer {
     }
 
     /**
-     * Add user attributes to cache.
+     * Copies the cache entry against the authorization code and adds an entry against the access token. This is done to
+     * reuse the calculated user claims for subsequent usages such as user info calls.
      *
      * @param tokenReqDTO
      * @param tokenRespDTO
      */
-    private void addUserAttributesToCache(OAuth2AccessTokenReqDTO tokenReqDTO, OAuth2AccessTokenRespDTO tokenRespDTO) {
+    private void addUserAttributesAgainstAccessToken(OAuth2AccessTokenReqDTO tokenReqDTO,
+                                                     OAuth2AccessTokenRespDTO tokenRespDTO) {
 
-        AuthorizationGrantCacheKey oldCacheKey = new AuthorizationGrantCacheKey(tokenReqDTO.getAuthorizationCode());
+        AuthorizationGrantCacheKey oldCacheKey = new AuthorizationGrantCacheKey(getAuthorizationCode(tokenReqDTO));
         //checking getUserAttributesId value of cacheKey before retrieve entry from cache as it causes to NPE
         if (oldCacheKey.getUserAttributesId() != null) {
             AuthorizationGrantCacheEntry authorizationGrantCacheEntry =
@@ -408,19 +405,31 @@ public class AccessTokenIssuer {
             AuthorizationGrantCacheKey newCacheKey = new AuthorizationGrantCacheKey(tokenRespDTO.getAccessToken());
             if (authorizationGrantCacheEntry != null) {
                 authorizationGrantCacheEntry.setTokenId(tokenRespDTO.getTokenId());
-                if (AuthorizationGrantCache.getInstance().getValueFromCacheByToken(newCacheKey) == null) {
-                    if (log.isDebugEnabled()
-                            && IdentityUtil.isTokenLoggable(IdentityConstants.IdentityTokens.ACCESS_TOKEN)) {
-                        log.debug("No AuthorizationGrantCache entry found for the access token(hashed):" +
-                                DigestUtils.sha256Hex(newCacheKey.getUserAttributesId()) + ", hence adding to cache");
+                if (log.isDebugEnabled()) {
+                    if(IdentityUtil.isTokenLoggable(IdentityConstants.IdentityTokens.ACCESS_TOKEN)) {
+                        log.debug("Adding AuthorizationGrantCache entry for the access token(hashed):" +
+                                DigestUtils.sha256Hex(newCacheKey.getUserAttributesId()));
+                    } else {
+                        log.debug("Adding AuthorizationGrantCache entry for the access token");
                     }
-                    AuthorizationGrantCache.getInstance().addToCacheByToken(newCacheKey, authorizationGrantCacheEntry);
-                    AuthorizationGrantCache.getInstance().clearCacheEntryByCode(oldCacheKey);
-                } else {
-                    //if the user attributes are already saved for access token, no need to add again.
                 }
+                authorizationGrantCacheEntry.setValidityPeriod(
+                        TimeUnit.MILLISECONDS.toNanos(tokenRespDTO.getExpiresInMillis()));
+                AuthorizationGrantCache.getInstance().addToCacheByToken(newCacheKey, authorizationGrantCacheEntry);
             }
         }
+    }
+
+    private void clearCacheEntryAgainstAuthorizationCode(String authorizationCode) {
+        AuthorizationGrantCacheKey oldCacheKey = new AuthorizationGrantCacheKey(authorizationCode);
+        //checking getUserAttributesId value of cacheKey before retrieve entry from cache as it causes to NPE
+        if (oldCacheKey.getUserAttributesId() != null) {
+            AuthorizationGrantCache.getInstance().clearCacheEntryByCode(oldCacheKey);
+        }
+    }
+
+    private String getAuthorizationCode(OAuth2AccessTokenReqDTO tokenReqDTO) {
+        return tokenReqDTO.getAuthorizationCode();
     }
 
     /**
@@ -460,5 +469,36 @@ public class AccessTokenIssuer {
         if (tokReqMsgCtx.getProperty(OAuthConstants.RESPONSE_HEADERS_PROPERTY) != null) {
             tokenRespDTO.setResponseHeaders((ResponseHeader[]) tokReqMsgCtx.getProperty(OAuthConstants.RESPONSE_HEADERS_PROPERTY));
         }
+    }
+
+    private OAuthAppDO getOAuthApplication(String consumerKey) throws InvalidOAuthClientException,
+            IdentityOAuth2Exception {
+
+        OAuthAppDO authAppDO = OAuth2Util.getAppInformationByClientId(consumerKey);
+        String appState = authAppDO.getState();
+        if (StringUtils.isEmpty(appState)) {
+            if (log.isDebugEnabled()) {
+                log.debug("A valid OAuth client could not be found for client_id: " + consumerKey);
+            }
+            throw new InvalidOAuthClientException("A valid OAuth client could not be found for client_id: " +
+                    Encode.forHtml(consumerKey));
+        }
+
+        if (isNotActiveState(appState)) {
+            if (log.isDebugEnabled()) {
+                log.debug("App is not in active state in client ID: " + consumerKey + ". App state is:" + appState);
+            }
+            throw new InvalidOAuthClientException("Oauth application is not in active state");
+        }
+
+        if (log.isDebugEnabled()) {
+            log.debug("Oauth App validation success for consumer key: " + consumerKey);
+        }
+        return authAppDO;
+    }
+
+    private static boolean isNotActiveState(String appState) {
+
+        return !APP_STATE_ACTIVE.equalsIgnoreCase(appState);
     }
 }

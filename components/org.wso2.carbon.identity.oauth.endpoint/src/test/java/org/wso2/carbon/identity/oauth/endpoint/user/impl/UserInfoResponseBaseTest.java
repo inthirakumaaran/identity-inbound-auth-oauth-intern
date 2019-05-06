@@ -1,6 +1,8 @@
 package org.wso2.carbon.identity.oauth.endpoint.user.impl;
 
+import org.apache.oltu.oauth2.as.issuer.OAuthIssuer;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.powermock.api.mockito.PowerMockito;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.testng.PowerMockObjectFactory;
@@ -19,6 +21,7 @@ import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.oauth.cache.AuthorizationGrantCache;
 import org.wso2.carbon.identity.oauth.cache.AuthorizationGrantCacheEntry;
 import org.wso2.carbon.identity.oauth.cache.AuthorizationGrantCacheKey;
+import org.wso2.carbon.identity.oauth.common.exception.InvalidOAuthClientException;
 import org.wso2.carbon.identity.oauth.config.OAuthServerConfiguration;
 import org.wso2.carbon.identity.oauth.endpoint.util.ClaimUtil;
 import org.wso2.carbon.identity.oauth.user.UserInfoClaimRetriever;
@@ -26,6 +29,9 @@ import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2TokenValidationResponseDTO;
 import org.wso2.carbon.identity.oauth2.internal.OAuth2ServiceComponentHolder;
 import org.wso2.carbon.identity.oauth2.model.AccessTokenDO;
+import org.wso2.carbon.identity.oauth2.token.JWTTokenIssuer;
+import org.wso2.carbon.identity.oauth2.token.OauthTokenIssuer;
+import org.wso2.carbon.identity.oauth2.token.OauthTokenIssuerImpl;
 import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
 import org.wso2.carbon.identity.openidconnect.OpenIDConnectClaimFilterImpl;
 import org.wso2.carbon.identity.openidconnect.internal.OpenIDConnectServiceComponentHolder;
@@ -44,7 +50,9 @@ import java.util.List;
 import java.util.Map;
 
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.anyMap;
 import static org.mockito.Matchers.anyString;
 import static org.powermock.api.mockito.PowerMockito.mock;
 import static org.powermock.api.mockito.PowerMockito.mockStatic;
@@ -94,6 +102,11 @@ public class UserInfoResponseBaseTest extends PowerMockTestCase {
 
     public static final String CUSTOM_CLAIM_VALUE = "custom_claim_value";
     public static final String[] OIDC_SCOPE_ARRAY = new String[]{OIDC_SCOPE};
+    private static final String DEFAULT_TOKEN_TYPE = "Default";
+    private static final String JWT_TOKEN_TYPE = "JWT";
+
+    @Mock
+    private OAuthIssuer oAuthIssuer;
     @Mock
     protected RegistryService registryService;
     @Mock
@@ -123,9 +136,13 @@ public class UserInfoResponseBaseTest extends PowerMockTestCase {
 
     @BeforeClass
     public void setUp() {
-        OpenIDConnectServiceComponentHolder.getInstance()
-                .getOpenIDConnectClaimFilters()
-                .add(new OpenIDConnectClaimFilterImpl());
+        // Skipping filtering with user consent.
+        // TODO: Remove mocking claims filtering based on consent when fixing https://github.com/wso2/product-is/issues/2676
+        OpenIDConnectClaimFilterImpl openIDConnectClaimFilter = Mockito.spy(new OpenIDConnectClaimFilterImpl());
+        when(openIDConnectClaimFilter
+                .getClaimsFilteredByUserConsent(anyMap(), any(AuthenticatedUser.class), anyString(), anyString()))
+                .thenAnswer(invocation -> invocation.getArguments()[0]);
+        OpenIDConnectServiceComponentHolder.getInstance().getOpenIDConnectClaimFilters().add(openIDConnectClaimFilter);
         resource = new ResourceImpl();
     }
 
@@ -296,12 +313,15 @@ public class UserInfoResponseBaseTest extends PowerMockTestCase {
         prepareClaimUtil(inputClaims);
     }
 
-    private void mockAccessTokenDOInOAuth2Util(AuthenticatedUser authorizedUser) throws IdentityOAuth2Exception {
+    private void mockAccessTokenDOInOAuth2Util(AuthenticatedUser authorizedUser)
+            throws IdentityOAuth2Exception, InvalidOAuthClientException {
         AccessTokenDO accessTokenDO = new AccessTokenDO();
         accessTokenDO.setAuthzUser(authorizedUser);
         when(OAuth2Util.getAccessTokenDOfromTokenIdentifier(ACCESS_TOKEN)).thenReturn(accessTokenDO);
 
         when(OAuth2Util.getAuthenticatedUser(any(AccessTokenDO.class))).thenCallRealMethod();
+        OauthTokenIssuer oauthTokenIssuer = new OauthTokenIssuerImpl();
+        when(OAuth2Util.getTokenIssuer(ACCESS_TOKEN)).thenReturn(oauthTokenIssuer);
     }
 
     protected void prepareForResponseClaimTest(Map<String, Object> inputClaims,
@@ -348,7 +368,6 @@ public class UserInfoResponseBaseTest extends PowerMockTestCase {
 
         final Map<String, Object> expectedClaimMapForCustomScope = new HashMap<>();
         expectedClaimMapForCustomScope.put(FIRST_NAME, FIRST_NAME_VALUE);
-        expectedClaimMapForCustomScope.put(CUSTOM_CLAIM, CUSTOM_CLAIM_VALUE);
 
         return new Object[][]{
                 // Input User Claims,
@@ -395,5 +414,23 @@ public class UserInfoResponseBaseTest extends PowerMockTestCase {
         assertFalse(claimsInResponse.isEmpty());
         assertNotNull(claimsInResponse.get(SUB));
     }
-}
 
+    protected void mockObjectsRelatedToTokenValidation() throws Exception {
+
+        mockStatic(OAuthServerConfiguration.class);
+        when(OAuthServerConfiguration.getInstance()).thenReturn(oAuthServerConfiguration);
+        when(OAuthServerConfiguration.getInstance().getOAuthTokenGenerator()).thenReturn(oAuthIssuer);
+        when(OAuthServerConfiguration.getInstance().getSignatureAlgorithm()).thenReturn("SHA256withRSA");
+        when(OAuth2Util.getAccessTokenIdentifier(any())).thenCallRealMethod();
+        when(OAuth2Util.findAccessToken(anyString(), anyBoolean())).thenCallRealMethod();
+        when(OAuth2Util.class, "getAccessTokenDOFromMatchingTokenIssuer", anyString(), anyMap(), anyBoolean()).
+                thenCallRealMethod();
+        AccessTokenDO accessTokenDO = new AccessTokenDO();
+        accessTokenDO.setAccessToken(ACCESS_TOKEN);
+        when(OAuth2Util.getAccessTokenDOFromTokenIdentifier(anyString(), anyBoolean())).thenReturn(accessTokenDO);
+        Map<String, OauthTokenIssuer> oauthTokenIssuerMap = new HashMap<>();
+        oauthTokenIssuerMap.put(DEFAULT_TOKEN_TYPE, new OauthTokenIssuerImpl());
+        oauthTokenIssuerMap.put(JWT_TOKEN_TYPE, new JWTTokenIssuer());
+        when(OAuthServerConfiguration.getInstance().getOauthTokenIssuerMap()).thenReturn(oauthTokenIssuerMap);
+    }
+}

@@ -23,10 +23,11 @@ public class Oauth2ScopeConstants {
 
     public static final int MAX_FILTER_COUNT = 30;
     public static final int INVALID_SCOPE_ID = -1;
+    public static final String SCOPE_ID = "SCOPE_ID";
 
     public enum ErrorMessages {
         ERROR_CODE_BAD_REQUEST_SCOPE_NAME_NOT_SPECIFIED("41001", "Scope Name is not specified."),
-        ERROR_CODE_BAD_REQUEST_SCOPE_DESCRIPTION_NOT_SPECIFIED("41002", "Scope Description is not specified."),
+        ERROR_CODE_BAD_REQUEST_SCOPE_DISPLAY_NAME_NOT_SPECIFIED("41002", "Scope Display Name is not specified."),
         ERROR_CODE_NOT_FOUND_SCOPE("41003", "Scope %s is not found."),
         ERROR_CODE_CONFLICT_REQUEST_EXISTING_SCOPE("41004",
                 "Scope with the name %s already exists in the system. Please use a different scope name."),
@@ -71,6 +72,10 @@ public class Oauth2ScopeConstants {
 
         public static final String LIMIT = "limit";
         public static final String OFFSET = "offset";
+    }
+
+    public static final class DataBaseType {
+        public static final String ORACLE = "Oracle";
     }
 
 }

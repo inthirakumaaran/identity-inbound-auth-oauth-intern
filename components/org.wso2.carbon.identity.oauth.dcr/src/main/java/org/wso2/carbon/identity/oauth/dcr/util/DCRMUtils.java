@@ -28,10 +28,15 @@ import org.wso2.carbon.identity.oauth.dcr.exception.DCRMServerException;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.regex.Pattern;
+
+import static org.wso2.carbon.identity.oauth.dcr.util.DCRConstants.APP_NAME_VALIDATING_REGEX;
 
 public class DCRMUtils {
 
     private static final Log log = LogFactory.getLog(DCRMUtils.class);
+    private static Pattern spNameRegexPattern = null;
+    private static final String SERVICE_PROVIDERS_NAME_REGEX = "ServiceProviders.SPNameRegex";
 
     public static boolean isRedirectionUriValid(String redirectUri) {
 
@@ -54,6 +59,48 @@ public class DCRMUtils {
             }
             return false;
         }
+        return true;
+    }
+
+    public static boolean isBackchannelLogoutUriValid(String backchannelLogoutUri) {
+
+        if(StringUtils.isBlank(backchannelLogoutUri)) {
+            return true;
+        }
+
+        if (log.isDebugEnabled()) {
+            log.debug("Validating back-channel logout uri: " + backchannelLogoutUri);
+        }
+
+        if(backchannelLogoutUri.contains("#")) {
+            if (log.isDebugEnabled()) {
+                String errorMessage = "The back-channel logout URI: " + backchannelLogoutUri
+                        + ", contains a fragment component.";
+                log.debug(errorMessage);
+            }
+            return false;
+        }
+
+        URI uri;
+        try {
+            uri = new URI(backchannelLogoutUri);
+        } catch (URISyntaxException e) {
+            if (log.isDebugEnabled()) {
+                String errorMessage = "The back-channel logout URI: " + backchannelLogoutUri + ", is not a valid URI.";
+                log.debug(errorMessage, e);
+            }
+            return false;
+        }
+
+        if(!uri.isAbsolute()) {
+            if (log.isDebugEnabled()) {
+                String errorMessage = "The back-channel logout URI: " + backchannelLogoutUri
+                        + ", is not an absolute URI.";
+                log.debug(errorMessage);
+            }
+            return false;
+        }
+
         return true;
     }
 
@@ -111,5 +158,40 @@ public class DCRMUtils {
         }
 
         return IdentityException.error(DCRMClientException.class, error.toString(), errorDescription);
+    }
+
+    /**
+     * Validate application name according to the regex
+     *
+     * @return validated or not
+     */
+    public static boolean isRegexValidated(String applicationName) {
+
+        if (spNameRegexPattern == null) {
+            String spValidatorRegex = getSPValidatorRegex();
+            spNameRegexPattern = Pattern.compile(spValidatorRegex);
+        }
+        return spNameRegexPattern.matcher(applicationName).matches();
+    }
+
+    @Deprecated
+    public static boolean isRegexValidated(String providedString, String regex) {
+
+        Pattern regexPattern = Pattern.compile(regex);
+        return regexPattern.matcher(providedString).matches();
+    }
+
+    /**
+     * Return the Service Provider validation regex.
+     *
+     * @return regex.
+     */
+    public static String getSPValidatorRegex() {
+
+        String spValidatorRegex = IdentityUtil.getProperty(SERVICE_PROVIDERS_NAME_REGEX);
+        if (StringUtils.isBlank(spValidatorRegex)) {
+            spValidatorRegex = APP_NAME_VALIDATING_REGEX;
+        }
+        return spValidatorRegex;
     }
 }

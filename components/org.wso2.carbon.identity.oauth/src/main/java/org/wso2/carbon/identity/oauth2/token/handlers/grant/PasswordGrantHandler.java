@@ -26,6 +26,7 @@ import org.wso2.carbon.base.MultitenantConstants;
 import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedUser;
 import org.wso2.carbon.identity.application.common.IdentityApplicationManagementException;
 import org.wso2.carbon.identity.application.common.model.ServiceProvider;
+import org.wso2.carbon.identity.base.IdentityException;
 import org.wso2.carbon.identity.base.IdentityRuntimeException;
 import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.oauth.common.OAuthConstants;
@@ -136,7 +137,16 @@ public class PasswordGrantHandler extends AbstractAuthorizationGrantHandler {
                 throw new IdentityOAuth2Exception("Authentication failed for " + tokenReq.getResourceOwnerUsername());
             }
         } catch (UserStoreException e) {
-            throw new IdentityOAuth2Exception("Error while authenticating user from user store");
+            String message = e.getMessage();
+            if (!(e.getCause() instanceof IdentityException)) {
+                throw new IdentityOAuth2Exception(message, e);
+            }
+            IdentityException identityException = (IdentityException) (e.getCause());
+            // Set error code to message if available.
+            if (StringUtils.isNotBlank(identityException.getErrorCode())) {
+                message = identityException.getErrorCode() + " " + e.getMessage();
+            }
+            throw new IdentityOAuth2Exception(message, e);
         }
         return true;
     }
@@ -177,7 +187,7 @@ public class PasswordGrantHandler extends AbstractAuthorizationGrantHandler {
     private AuthenticatedUser getAuthenticatedUser(OAuth2AccessTokenReqDTO tokenReq, ServiceProvider serviceProvider) {
         String username = getFullQualifiedUsername(tokenReq);
         AuthenticatedUser user = OAuth2Util.getUserFromUserName(username);
-        user.setAuthenticatedSubjectIdentifier(user.toString(), serviceProvider);
+        user.setAuthenticatedSubjectIdentifier(user.getUserName(), serviceProvider);
         if (log.isDebugEnabled()) {
             log.debug("Token request with password grant type from user: " + user);
         }

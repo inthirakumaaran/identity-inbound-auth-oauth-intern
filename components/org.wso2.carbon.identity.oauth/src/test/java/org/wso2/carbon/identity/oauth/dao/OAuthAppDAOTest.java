@@ -48,6 +48,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.MockitoAnnotations.initMocks;
@@ -80,20 +82,21 @@ import static org.testng.Assert.fail;
 @PowerMockIgnore({"javax.*", "org.w3c.*", "org.xml.*"})
 public class OAuthAppDAOTest extends TestOAuthDAOBase {
 
+    public static final int TENANT_ID = 7777;
+    public static final String GRANT_TYPES = "password code";
     private static final String USER_NAME = "user1";
     private static final String USER_STORE_DOMAIN = "USER_STORE_DOMAIN_NAME";
     private static final String TENANT_DOMAIN = "TENANT_DOMAIN";
-    public static final int TENANT_ID = 7777;
-
     private static final String CONSUMER_KEY = "ca19a540f544777860e44e75f605d927";
     private static final String CONSUMER_SECRET = "87n9a540f544777860e44e75f605d435";
     private static final String APP_NAME = "myApp";
     private static final String CALLBACK = "http://localhost:8080/redirect";
-    public static final String GRANT_TYPES = "password code";
-
+    private static final String[] SCOPE_VALIDATORS = {"org.wso2.carbon.identity.oauth2.validators.JDBCScopeValidator",
+            "org.wso2.carbon.identity.oauth2.validators.XACMLScopeValidator"};
     private static final int USER_ACCESS_TOKEN_EXPIRY_TIME = 3000;
     private static final int APPLICATION_ACCESS_TOKEN_EXPIRY_TIME = 2000;
     private static final int REFRESH_TOKEN_EXPIRY_TIME = 10000;
+    private static final int ID_TOKEN_EXPIRY_TIME = 5000;
 
     private static final String DB_NAME = "OAuthAppDAO";
 
@@ -101,6 +104,9 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
 
     private static final String COUNT_APPS = "SELECT count(*) FROM IDN_OAUTH_CONSUMER_APPS WHERE APP_NAME=? and " +
             "TENANT_ID=?";
+
+    private static final String BACKCHANNEL_LOGOUT="https://localhost:8090/playground2/backChannelLogout";
+
     @Mock
     private TenantManager mockedTenantManager;
 
@@ -130,17 +136,9 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         cleanUpOAuthConsumerApps(DB_NAME);
     }
 
-    @DataProvider(name = "pkceEnabledDataProvider")
-    public Object[][] provideData() throws Exception {
-        return new Object[][]{
-                {true},
-                {false}
-        };
-    }
-
-    @Test(dataProvider = "pkceEnabledDataProvider")
-    public void testAddOAuthApplication(Boolean isPkceEnabled) throws Exception {
-        setupMocksForTest(isPkceEnabled);
+    @Test
+    public void testAddOAuthApplication() throws Exception {
+        setupMocksForTest();
         OAuthAppDO appDO = getDefaultOAuthAppDO();
         try (Connection connection = getConnection(DB_NAME)) {
             mockIdentityUtilDataBaseConnection(connection);
@@ -168,9 +166,9 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
     /**
      * Test adding duplicate OAuth apps.
      */
-    @Test(dataProvider = "pkceEnabledDataProvider", expectedExceptions = IdentityOAuthAdminException.class)
-    public void testAddDuplicateOAuthApplication(Boolean isPkceEnabled) throws Exception {
-        setupMocksForTest(isPkceEnabled);
+    @Test(expectedExceptions = IdentityOAuthAdminException.class)
+    public void testAddDuplicateOAuthApplication() throws Exception {
+        setupMocksForTest();
 
         OAuthAppDO appDO = getDefaultOAuthAppDO();
         OAuthAppDAO appDAO = new OAuthAppDAO();
@@ -182,9 +180,9 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         }
     }
 
-    @Test(dataProvider = "pkceEnabledDataProvider", expectedExceptions = IdentityOAuthAdminException.class)
-    public void testAddOAuthApplicationWithExceptions(Boolean isPkceEnabled) throws Exception {
-        setupMocksForTest(isPkceEnabled);
+    @Test(expectedExceptions = IdentityOAuthAdminException.class)
+    public void testAddOAuthApplicationWithExceptions() throws Exception {
+        setupMocksForTest();
 
         OAuthAppDO appDO = getDefaultOAuthAppDO();
         try (Connection connection = getConnection(DB_NAME)) {
@@ -226,22 +224,29 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         }
     }
 
-    @Test(dataProvider = "pkceEnabledDataProvider")
-    public void testUpdateConsumerApplication(Boolean isPkceEnabled) throws Exception {
+    @Test
+    public void testUpdateConsumerApplication() throws Exception {
         final String MODIFIED_CALLBACK_URL = "http://idp.wso2.com/callback";
         final String MODIFIED_GRANT_TYPES = "password";
         final String MODIFIED_APP_NAME = "MODIFIED_APP_NAME";
+        final String[] MODIFIED_SCOPE_VALIDATORS = {"org.wso2.carbon.identity.oauth2.validators.JDBCScopeValidator"};
         final long MODIFIED_APPLICATION_ACCESS_TOKEN_EXPIRY_TIME = 1000;
         final long MODIFIED_USER_ACCESS_TOKEN_EXPIRY_TIME = 8000;
         final long MODIFIED_REFRESH_TOKEN_EXPIRY_TIME = 18000;
 
         final String GET_APP_FIELDS = "SELECT APP_NAME,GRANT_TYPES,CALLBACK_URL," +
                 "APP_ACCESS_TOKEN_EXPIRE_TIME,USER_ACCESS_TOKEN_EXPIRE_TIME,REFRESH_TOKEN_EXPIRE_TIME, " +
-                "PKCE_MANDATORY, PKCE_SUPPORT_PLAIN FROM IDN_OAUTH_CONSUMER_APPS WHERE CONSUMER_KEY=?";
+                "ID_TOKEN_EXPIRE_TIME, PKCE_MANDATORY, PKCE_SUPPORT_PLAIN, ID " +
+                "FROM IDN_OAUTH_CONSUMER_APPS WHERE CONSUMER_KEY=?";
 
-        setupMocksForTest(isPkceEnabled);
+        final String GET_SCOPE_VALIDATORS = "SELECT SCOPE_VALIDATOR FROM IDN_OAUTH2_SCOPE_VALIDATORS " +
+                "WHERE APP_ID=?";
+
+        setupMocksForTest();
         try (Connection connection = getConnection(DB_NAME);
-             PreparedStatement preparedStatement = connection.prepareStatement(GET_APP_FIELDS)) {
+             PreparedStatement preparedStatement = connection.prepareStatement(GET_APP_FIELDS);
+             PreparedStatement preparedStatementGetValidators = connection.prepareStatement(GET_SCOPE_VALIDATORS);
+        ) {
             mockIdentityUtilDataBaseConnection(connection);
 
             OAuthAppDAO appDAO = new OAuthAppDAO();
@@ -257,26 +262,35 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
                 assertEquals(resultSet.getLong(4), APPLICATION_ACCESS_TOKEN_EXPIRY_TIME);
                 assertEquals(resultSet.getLong(5), USER_ACCESS_TOKEN_EXPIRY_TIME);
                 assertEquals(resultSet.getLong(6), REFRESH_TOKEN_EXPIRY_TIME);
-                if (isPkceEnabled) {
-                    // These asserts are only relevant if PKCE is enabled
-                    assertEquals(resultSet.getBoolean(7), false);
-                    assertEquals(resultSet.getBoolean(8), false);
+                assertEquals(resultSet.getLong(7), ID_TOKEN_EXPIRY_TIME);
+                assertEquals(resultSet.getBoolean(8), false);
+                assertEquals(resultSet.getBoolean(9), false);
+                appDO.setId(resultSet.getInt(10));
+            }
+            preparedStatementGetValidators.setInt(1,appDO.getId());
+            List<String> scopeValidators = new ArrayList<>();
+            try (ResultSet rs = preparedStatementGetValidators.executeQuery()) {
+                while (rs.next()) {
+                    scopeValidators.add(rs.getString(1));
                 }
             }
+            assertEquals(scopeValidators.toArray(new String[scopeValidators.size()]), SCOPE_VALIDATORS);
 
             // Modify the app
             appDO.setApplicationName(MODIFIED_APP_NAME);
             appDO.setCallbackUrl(MODIFIED_CALLBACK_URL);
             appDO.setGrantTypes(MODIFIED_GRANT_TYPES);
+            appDO.setScopeValidators(MODIFIED_SCOPE_VALIDATORS);
             appDO.setApplicationAccessTokenExpiryTime(MODIFIED_APPLICATION_ACCESS_TOKEN_EXPIRY_TIME);
             appDO.setUserAccessTokenExpiryTime(MODIFIED_USER_ACCESS_TOKEN_EXPIRY_TIME);
             appDO.setRefreshTokenExpiryTime(MODIFIED_REFRESH_TOKEN_EXPIRY_TIME);
-            if (isPkceEnabled) {
-                // Enable PKCE related configs
-                appDO.setPkceMandatory(true);
-                appDO.setPkceSupportPlain(true);
-            }
+            // Enable PKCE related configs
+            appDO.setPkceMandatory(true);
+            appDO.setPkceSupportPlain(true);
 
+            AuthenticatedUser authenticatedUser = new AuthenticatedUser();
+            appDO.setAppOwner(authenticatedUser);
+            appDO.getAppOwner().setUserName("testUser");
             appDAO.updateConsumerApplication(appDO);
 
             preparedStatement.setString(1, CONSUMER_KEY);
@@ -288,19 +302,24 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
                 assertEquals(resultSet.getLong(4), MODIFIED_APPLICATION_ACCESS_TOKEN_EXPIRY_TIME);
                 assertEquals(resultSet.getLong(5), MODIFIED_USER_ACCESS_TOKEN_EXPIRY_TIME);
                 assertEquals(resultSet.getLong(6), MODIFIED_REFRESH_TOKEN_EXPIRY_TIME);
-                if (isPkceEnabled) {
-                    // These asserts are only relevant if PKCE is enabled
-                    assertEquals(resultSet.getBoolean(7), true);
-                    assertEquals(resultSet.getBoolean(8), true);
+                assertEquals(resultSet.getBoolean(7), true);
+                assertEquals(resultSet.getBoolean(8), true);
+            }
+            preparedStatementGetValidators.setInt(1,appDO.getId());
+            scopeValidators = new ArrayList<>();
+            try (ResultSet rs = preparedStatementGetValidators.executeQuery()) {
+                while (rs.next()) {
+                    scopeValidators.add(rs.getString(1));
                 }
             }
+            assertEquals(scopeValidators.toArray(new String[scopeValidators.size()]), MODIFIED_SCOPE_VALIDATORS);
         }
     }
 
-    @Test(dataProvider = "pkceEnabledDataProvider", expectedExceptions = IdentityOAuthAdminException.class)
-    public void testUpdateConsumerApplicationWithExceptions(Boolean isPkceEnabled) throws Exception {
+    @Test(expectedExceptions = IdentityOAuthAdminException.class)
+    public void testUpdateConsumerApplicationWithExceptions() throws Exception {
 
-        setupMocksForTest(isPkceEnabled);
+        setupMocksForTest();
         try (Connection connection = getConnection(DB_NAME)) {
             mockIdentityUtilDataBaseConnection(connection);
             OAuthAppDO oAuthAppDO = getDefaultOAuthAppDO();
@@ -310,8 +329,12 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
             mockIdentityDataBaseUtilConnection(exceptionThrowingConnection);
 
             oAuthAppDO.setCallbackUrl("CHANGED_CALL_BACK");
+            oAuthAppDO.setBackChannelLogoutUrl("CHANGED_BACKCHANNEL_LOGOUT");
 
             OAuthAppDAO AppDAO = new OAuthAppDAO();
+            AuthenticatedUser authenticatedUser = new AuthenticatedUser();
+            oAuthAppDO.setAppOwner(authenticatedUser);
+            oAuthAppDO.getAppOwner().setUserName("testUser");
             AppDAO.updateConsumerApplication(oAuthAppDO);
         }
     }
@@ -456,17 +479,15 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
     @DataProvider(name = "booleanTests")
     public Object[][] booleanTest() throws Exception {
         return new Object[][]{
-                {true, true},
-                {true, false},
-                {false, true},
-                {false, false}
+                {true},
+                {false},
         };
     }
 
     @Test(dataProvider = "booleanTests")
-    public void testGetOAuthConsumerAppsOfUser(Boolean enablePKCE, Boolean isSensitive) throws Exception {
+    public void testGetOAuthConsumerAppsOfUser(Boolean isSensitive) throws Exception {
 
-        setupMocksForTest(enablePKCE, isSensitive);
+        setupMocksForTest(isSensitive);
         try (Connection connection = getConnection(DB_NAME)) {
             mockIdentityUtilDataBaseConnection(connection);
 
@@ -488,10 +509,9 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
     }
 
     @Test(dataProvider = "booleanTests", expectedExceptions = IdentityOAuthAdminException.class)
-    public void testGetOAuthConsumerAppsOfUserWithExceptions(Boolean isPkceEnabled,
-                                                             Boolean isUsernameCaseSensitive) throws Exception {
+    public void testGetOAuthConsumerAppsOfUserWithExceptions(Boolean isUsernameCaseSensitive) throws Exception {
 
-        setupMocksForTest(isPkceEnabled, isUsernameCaseSensitive);
+        setupMocksForTest(isUsernameCaseSensitive);
         try (Connection connection = getConnection(DB_NAME)) {
             Connection errorConnection = getExceptionThrowingConnection(connection);
             mockIdentityDataBaseUtilConnection(errorConnection);
@@ -501,9 +521,9 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         }
     }
 
-    @Test(dataProvider = "pkceEnabledDataProvider")
-    public void testGetAppInformation(Boolean isPkceEnabled) throws Exception {
-        setupMocksForTest(isPkceEnabled);
+    @Test
+    public void testGetAppInformation() throws Exception {
+        setupMocksForTest();
         try (Connection connection = getConnection(DB_NAME)) {
             mockIdentityUtilDataBaseConnection(connection);
             addOAuthApplication(getDefaultOAuthAppDO());
@@ -513,10 +533,37 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         }
     }
 
-    @Test(dataProvider = "pkceEnabledDataProvider", expectedExceptions = IdentityOAuth2Exception.class)
-    public void testGetAppInformationWithExceptions(Boolean isPkceEnabled) throws Exception {
+    @Test(dataProvider = "booleanTests")
+    public void testGetAppInformationWithOIDCProperties(Boolean isRenewRefreshEnabled) throws Exception {
+        setupMocksForTest();
+        try (Connection connection = getConnection(DB_NAME)) {
+            mockIdentityUtilDataBaseConnection(connection);
+            OAuthAppDO defaultOAuthAppDO = getDefaultOAuthAppDO();
 
-        setupMocksForTest(isPkceEnabled);
+            final String BACK_CHANNEL_LOGOUT_URL = "https://dummy.com/logout";
+            // Add OIDC properties.
+            defaultOAuthAppDO.setAudiences(new String[] {"DUMMY"});
+            defaultOAuthAppDO.setIdTokenEncryptionEnabled(true);
+            defaultOAuthAppDO.setRequestObjectSignatureValidationEnabled(true);
+            defaultOAuthAppDO.setBackChannelLogoutUrl(BACK_CHANNEL_LOGOUT_URL);
+            defaultOAuthAppDO.setRenewRefreshTokenEnabled(String.valueOf(isRenewRefreshEnabled));
+
+            addOAuthApplication(defaultOAuthAppDO);
+
+            OAuthAppDAO appDAO = new OAuthAppDAO();
+            OAuthAppDO oAuthAppDO = appDAO.getAppInformation(CONSUMER_KEY);
+            assertNotNull(oAuthAppDO);
+            assertEquals(oAuthAppDO.isIdTokenEncryptionEnabled(), true);
+            assertEquals(oAuthAppDO.isRequestObjectSignatureValidationEnabled(), true);
+            assertEquals(oAuthAppDO.getBackChannelLogoutUrl(), BACK_CHANNEL_LOGOUT_URL);
+            assertEquals(oAuthAppDO.getRenewRefreshTokenEnabled(), String.valueOf(isRenewRefreshEnabled));
+        }
+    }
+
+    @Test(expectedExceptions = IdentityOAuth2Exception.class)
+    public void testGetAppInformationWithExceptions() throws Exception {
+
+        setupMocksForTest();
         try (Connection connection = getConnection(DB_NAME)) {
             mockIdentityUtilDataBaseConnection(connection);
             addOAuthApplication(getDefaultOAuthAppDO());
@@ -529,10 +576,10 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         }
     }
 
-    @Test(dataProvider = "pkceEnabledDataProvider")
-    public void testGetAppInformationByAppName(Boolean isPkceEnabled) throws Exception {
+    @Test
+    public void testGetAppInformationByAppName() throws Exception {
 
-        setupMocksForTest(isPkceEnabled);
+        setupMocksForTest();
         try (Connection connection = getConnection(DB_NAME)) {
             mockIdentityUtilDataBaseConnection(connection);
 
@@ -547,10 +594,10 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         }
     }
 
-    @Test(dataProvider = "pkceEnabledDataProvider", expectedExceptions = IdentityOAuth2Exception.class)
-    public void testGetAppInformationByAppNameWithExceptions(Boolean isPkceEnabled) throws Exception {
+    @Test(expectedExceptions = IdentityOAuth2Exception.class)
+    public void testGetAppInformationByAppNameWithExceptions() throws Exception {
 
-        setupMocksForTest(isPkceEnabled);
+        setupMocksForTest();
         try (Connection connection = getConnection(DB_NAME)) {
 
             mockIdentityUtilDataBaseConnection(connection);
@@ -577,16 +624,19 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         appDO.setOauthConsumerSecret(CONSUMER_SECRET);
         appDO.setUser(authenticatedUser);
         appDO.setCallbackUrl(CALLBACK);
+        appDO.setBackChannelLogoutUrl(BACKCHANNEL_LOGOUT);
         appDO.setGrantTypes(GRANT_TYPES);
+        appDO.setScopeValidators(SCOPE_VALIDATORS);
         appDO.setOauthVersion(OAuthConstants.OAuthVersions.VERSION_1A);
         appDO.setApplicationAccessTokenExpiryTime(APPLICATION_ACCESS_TOKEN_EXPIRY_TIME);
         appDO.setUserAccessTokenExpiryTime(USER_ACCESS_TOKEN_EXPIRY_TIME);
         appDO.setRefreshTokenExpiryTime(REFRESH_TOKEN_EXPIRY_TIME);
+        appDO.setIdTokenExpiryTime(ID_TOKEN_EXPIRY_TIME);
         return appDO;
     }
 
-    private void setupMocksForTest(boolean isPkceEnabled, boolean isUsernameCaseSensitive) throws Exception {
-        setupMocksForTest(isPkceEnabled);
+    private void setupMocksForTest(boolean isUsernameCaseSensitive) throws Exception {
+        setupMocksForTest();
         mockStatic(IdentityUtil.class);
         when(IdentityUtil.isUserStoreInUsernameCaseSensitive(USER_NAME)).thenReturn(isUsernameCaseSensitive);
         when(IdentityUtil.addDomainToName(USER_NAME, USER_STORE_DOMAIN)).thenReturn(USER_STORE_DOMAIN + "/" +
@@ -598,13 +648,6 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
         when(mockedOAuthComponentServiceHolder.getRealmService()).thenReturn(mockedRealmService);
         when(mockedRealmService.getTenantManager()).thenReturn(mockedTenantManager);
         when(mockedTenantManager.getDomain(TENANT_ID)).thenReturn(TENANT_DOMAIN);
-    }
-
-    private void setupMocksForTest(boolean isPkceEnabled) throws Exception {
-        setupMocksForTest();
-
-        mockStatic(OAuth2ServiceComponentHolder.class);
-        when(OAuth2ServiceComponentHolder.isPkceEnabled()).thenReturn(isPkceEnabled);
     }
 
     private void setupMocksForTest() throws Exception {
@@ -655,7 +698,7 @@ public class OAuthAppDAOTest extends TestOAuthDAOBase {
      */
     private void cleanUpOAuthConsumerApps(String databaseName) throws Exception {
         try (Connection connection = getConnection(databaseName);
-                PreparedStatement preparedStatement = connection.prepareStatement((DELETE_ALL_CONSUMER_APPS))) {
+             PreparedStatement preparedStatement = connection.prepareStatement((DELETE_ALL_CONSUMER_APPS))) {
             preparedStatement.executeUpdate();
         }
     }

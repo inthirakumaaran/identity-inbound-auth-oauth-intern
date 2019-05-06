@@ -24,12 +24,16 @@ import com.nimbusds.jwt.PlainJWT;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.oltu.oauth2.common.error.OAuthError;
+import org.apache.oltu.oauth2.common.exception.OAuthSystemException;
+import org.wso2.carbon.identity.base.IdentityConstants;
+import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.oauth.config.OAuthServerConfiguration;
 import org.wso2.carbon.identity.oauth.endpoint.util.ClaimUtil;
 import org.wso2.carbon.identity.oauth.user.UserInfoEndpointException;
 import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2TokenValidationResponseDTO;
 import org.wso2.carbon.identity.oauth2.model.AccessTokenDO;
+import org.wso2.carbon.identity.oauth2.token.OauthTokenIssuer;
 import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
 import org.wso2.carbon.identity.openidconnect.AbstractUserInfoResponseBuilder;
 
@@ -56,9 +60,11 @@ public class UserInfoJWTResponse extends AbstractUserInfoResponseBuilder {
                                    String spTenantDomain,
                                    Map<String, Object> filteredUserClaims) throws UserInfoEndpointException {
 
-        JWTClaimsSet jwtClaimsSet = new JWTClaimsSet();
-        jwtClaimsSet.setAllClaims(filteredUserClaims);
-        return buildJWTResponse(tokenResponse, spTenantDomain, jwtClaimsSet);
+        JWTClaimsSet.Builder jwtClaimsSetBuilder = new JWTClaimsSet.Builder();
+        for (Map.Entry<String, Object> entry : filteredUserClaims.entrySet()) {
+            jwtClaimsSetBuilder.claim(entry.getKey(), entry.getValue());
+        }
+        return buildJWTResponse(tokenResponse, spTenantDomain, jwtClaimsSetBuilder.build());
     }
 
     private String buildJWTResponse(OAuth2TokenValidationResponseDTO tokenResponse,
@@ -101,24 +107,31 @@ public class UserInfoJWTResponse extends AbstractUserInfoResponseBuilder {
         if (isJWTSignedWithSPKey) {
             signingTenantDomain = spTenantDomain;
         } else {
-            AccessTokenDO accessTokenDO = getAccessTokenDO(tokenResponse.getAuthorizationContextToken().getTokenString());
-            signingTenantDomain = accessTokenDO.getAuthzUser().getTenantDomain();
+            signingTenantDomain = getAuthzUserTenantDomain(tokenResponse);
         }
         return signingTenantDomain;
     }
 
-    private AccessTokenDO getAccessTokenDO(String accessToken) throws UserInfoEndpointException {
-        AccessTokenDO accessTokenDO;
-        try {
-            accessTokenDO = OAuth2Util.getAccessTokenDOfromTokenIdentifier(accessToken);
-        } catch (IdentityOAuth2Exception e) {
-            throw new UserInfoEndpointException("Error occurred while signing JWT", e);
-        }
+    private String getAuthzUserTenantDomain(OAuth2TokenValidationResponseDTO tokenResponse)
+            throws UserInfoEndpointException {
 
-        if (accessTokenDO == null) {
-            // this means the token is not active so we can't proceed further
-            throw new UserInfoEndpointException(OAuthError.ResourceResponse.INVALID_TOKEN, "Invalid Access Token.");
+        AccessTokenDO accessTokenDO = null;
+        try {
+            accessTokenDO = OAuth2Util.findAccessToken(tokenResponse.getAuthorizationContextToken().getTokenString(),
+                    false);
+        } catch (IdentityOAuth2Exception e) {
+            if (IdentityUtil.isTokenLoggable(IdentityConstants.IdentityTokens.ACCESS_TOKEN)) {
+                throw new UserInfoEndpointException("Error occurred while obtaining access token DO for the token " +
+                        "identifier: " + tokenResponse.getAuthorizationContextToken().getTokenString(), e);
+            } else {
+                throw new UserInfoEndpointException("Error occurred while obtaining access token DO.", e);
+            }
         }
-        return accessTokenDO;
+        if (accessTokenDO.getAuthzUser() != null) {
+            return accessTokenDO.getAuthzUser().getTenantDomain();
+        } else {
+            throw new UserInfoEndpointException("Authorized user was not found in the access token DO when " +
+                    "retrieving the tenant domain.");
+        }
     }
 }

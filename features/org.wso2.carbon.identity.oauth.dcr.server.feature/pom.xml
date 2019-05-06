@@ -22,7 +22,7 @@
         <groupId>org.wso2.carbon.identity.inbound.auth.oauth2</groupId>
         <artifactId>identity-inbound-auth-oauth</artifactId>
         <relativePath>../../pom.xml</relativePath>
-        <version>5.5.156-SNAPSHOT</version>
+        <version>6.0.160-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
@@ -54,7 +54,7 @@
             <artifactId>gdata-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.google.guava.wso2</groupId>
+            <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
         </dependency>
         <dependency>
@@ -72,6 +72,14 @@
         <dependency>
             <groupId>net.minidev</groupId>
             <artifactId>json-smart</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.minidev</groupId>
+            <artifactId>accessors-smart</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm-all</artifactId>
         </dependency>
         <dependency>
             <groupId>org.wso2.orbit.com.github.dblock.waffle</groupId>
@@ -109,7 +117,7 @@
                                     <type>war</type>
                                     <overWrite>true</overWrite>
                                     <outputDirectory>${basedir}/src/main/resources/</outputDirectory>
-                                    <destFileName>api#identity#oauth2#dcr#v1.0.war</destFileName>
+                                    <destFileName>api#identity#oauth2#dcr#v1.1.war</destFileName>
                                 </artifactItem>
                             </artifactItems>
                         </configuration>
@@ -131,7 +139,7 @@
                                 <resource>
                                     <directory>resources</directory>
                                     <includes>
-                                        <include>api#identity#oauth2#dcr#v1.0.war</include>
+                                        <include>api#identity#oauth2#dcr#v1.1.war</include>
                                         <include>p2.inf</include>
                                         <include>build.properties</include>
                                     </includes>

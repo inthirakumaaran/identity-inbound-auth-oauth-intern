@@ -25,9 +25,13 @@
 <%@ page import="org.wso2.carbon.ui.CarbonUIMessage"%>
 <%@ page import="org.wso2.carbon.ui.CarbonUIUtil"%>
 <%@ page import="org.wso2.carbon.utils.ServerConstants"%>
+<%@ page import="org.wso2.carbon.identity.core.util.IdentityUtil" %>
 
 <%@ page import="java.util.ResourceBundle" %>
 <%@ page import="org.wso2.carbon.identity.oauth.ui.util.OAuthUIUtil" %>
+<%@ page import="java.util.ArrayList" %>
+<%@ page import="java.util.List" %>
+<%@ page import="java.util.Objects" %>
 
 <%@ taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt"%>
 <%@ taglib uri="http://wso2.org/projects/carbon/taglibs/carbontags.jar" prefix="carbon"%>
@@ -39,6 +43,7 @@
 <jsp:include page="../dialog/display_messages.jsp" />
 
 <%
+    boolean isHashDisabled = false;
     String httpMethod = request.getMethod();
     if (!"post".equalsIgnoreCase(httpMethod)) {
         response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
@@ -53,34 +58,52 @@
     String userAccessTokenExpiryTime = request.getParameter("userAccessTokenExpiryTime");
     String applicationAccessTokenExpiryTime = request.getParameter("applicationAccessTokenExpiryTime");
     String refreshTokenExpiryTime = request.getParameter("refreshTokenExpiryTime");
+    String idTokenExpiryTime = request.getParameter("idTokenExpiryTime");
+    String tokenType = request.getParameter("tokenType");
+    String logoutMechanism = request.getParameter("logoutMechanism");
+    String logoutUrl = request.getParameter("logoutUrl");
+    String isRenewRefreshTokenEnabled = request.getParameter("renewRefreshTokenPerApp");
     String grants;
    	StringBuffer buff = new StringBuffer();
     boolean pkceMandatory = false;
     boolean pkceSupportPlain = false;
+    boolean bypassClientCredentials = false;
 
-    if(request.getParameter("pkce") != null) {
+    if (request.getParameter("pkce") != null) {
         pkceMandatory = true;
     }
-    if(request.getParameter("pkce_plain") != null) {
+
+    if (request.getParameter("pkce_plain") != null) {
         pkceSupportPlain = true;
     }
 
-	String forwardTo = "index.jsp";
+    if (request.getParameter("bypass_client_credentials") != null) {
+        bypassClientCredentials = true;
+    }
+
+    // OIDC related properties
+    boolean isRequestObjectSignatureValidated = Boolean.parseBoolean(request.getParameter("validateRequestObjectSignature"));
+    boolean isIdTokenEncrypted = Boolean.parseBoolean(request.getParameter("encryptIdToken"));
+    String idTokenEncryptionAlgorithm = request.getParameter("idTokenEncryptionAlgorithm");
+    String idTokenEncryptionMethod = request.getParameter("idTokenEncryptionMethod");
+    
+    String forwardTo = "index.jsp";
     String BUNDLE = "org.wso2.carbon.identity.oauth.ui.i18n.Resources";
 	ResourceBundle resourceBundle = ResourceBundle.getBundle(BUNDLE, request.getLocale());
 	OAuthConsumerAppDTO app = new OAuthConsumerAppDTO();
-	
-	String spName = (String) session.getAttribute("application-sp-name");
-	session.removeAttribute("application-sp-name");
+    
+    String spName = request.getParameter("application");
 	boolean isError = false;
-	
+
     try {
-        if (OAuthUIUtil.isValidURI(callback)) {
+        if (OAuthUIUtil.isValidURI(callback) || callback.startsWith(OAuthConstants.CALLBACK_URL_REGEXP_PREFIX)) {
             String cookie = (String) session.getAttribute(ServerConstants.ADMIN_SERVICE_COOKIE);
             String backendServerURL = CarbonUIUtil.getServerURL(config.getServletContext(), session);
             ConfigurationContext configContext =
                     (ConfigurationContext) config.getServletContext().getAttribute(CarbonConstants.CONFIGURATION_CONTEXT);
             OAuthAdminClient client = new OAuthAdminClient(cookie, backendServerURL, configContext);
+            isHashDisabled = client.isHashDisabled();
+
             app.setOauthConsumerKey(consumerkey);
             app.setOauthConsumerSecret(consumersecret);
             app.setCallbackUrl(callback);
@@ -91,6 +114,8 @@
             app.setUserAccessTokenExpiryTime(Long.parseLong(userAccessTokenExpiryTime));
             app.setApplicationAccessTokenExpiryTime(Long.parseLong(applicationAccessTokenExpiryTime));
             app.setRefreshTokenExpiryTime(Long.parseLong(refreshTokenExpiryTime));
+            app.setIdTokenExpiryTime(Long.parseLong(idTokenExpiryTime));
+            app.setTokenType(tokenType);
             String[] grantTypes = client.getAllowedOAuthGrantTypes();
             for (String grantType : grantTypes) {
                 String grant = request.getParameter("grant_" + grantType);
@@ -99,9 +124,49 @@
                 }
             }
             grants = buff.toString();
+
+            List<String> scopeValidators = new ArrayList<String>();
+            String[] allowedValidators = client.getAllowedScopeValidators();
+            for (String allowedValidator : allowedValidators) {
+                String scopeValidatorValue = request.getParameter(OAuthUIUtil.getScopeValidatorId(allowedValidator));
+                if (scopeValidatorValue != null) {
+                    scopeValidators.add(allowedValidator);
+                }
+            }
+
             if (OAuthConstants.OAuthVersions.VERSION_2.equals(oauthVersion)) {
                 app.setGrantTypes(grants);
+                app.setScopeValidators(scopeValidators.toArray(new String[scopeValidators.size()]));
             }
+            if (Boolean.parseBoolean(request.getParameter("enableAudienceRestriction"))) {
+                String audiencesCountParameter = request.getParameter("audiencePropertyCounter");
+                if (IdentityUtil.isNotBlank(audiencesCountParameter)) {
+                    int audiencesCount = Integer.parseInt(audiencesCountParameter);
+                    String[] audiences = request.getParameterValues("audiencePropertyName");
+                    if (OAuthConstants.OAuthVersions.VERSION_2.equals(oauthVersion)) {
+                        app.setAudiences(audiences);
+                    }
+                }
+            }
+            
+            app.setRequestObjectSignatureValidationEnabled(isRequestObjectSignatureValidated);
+            app.setIdTokenEncryptionEnabled(isIdTokenEncrypted);
+            if (isIdTokenEncrypted) {
+                app.setIdTokenEncryptionAlgorithm(idTokenEncryptionAlgorithm);
+                app.setIdTokenEncryptionMethod(idTokenEncryptionMethod);
+            }
+            app.setBypassClientCredentials(bypassClientCredentials);
+
+            if (OAuthConstants.OIDCConfigProperties.BACK_CHANNEL_LOGOUT.equalsIgnoreCase(logoutMechanism)) {
+                app.setBackChannelLogoutUrl(logoutUrl);
+            } else if (OAuthConstants.OIDCConfigProperties.FRONT_CHANNEL_LOGOUT.equalsIgnoreCase(logoutMechanism)) {
+                app.setFrontchannelLogoutUrl(logoutUrl);
+            }
+
+            if (!Objects.equals(isRenewRefreshTokenEnabled, "notAssigned")) {
+                app.setRenewRefreshTokenEnabled(String.valueOf(Boolean.parseBoolean(isRenewRefreshTokenEnabled)));
+            }
+            
             client.updateOAuthApplicationData(app);
             String message = resourceBundle.getString("app.updated.successfully");
             CarbonUIMessage.sendCarbonUIMessage(message, CarbonUIMessage.INFO, request);
@@ -112,10 +177,10 @@
         }
 
     } catch (Exception e) {
-    	isError = false;
-    	String message = resourceBundle.getString("error.while.updating.app");
-    	CarbonUIMessage.sendCarbonUIMessage(message, CarbonUIMessage.ERROR, request,e);
-        forwardTo ="../admin/error.jsp";
+        isError = false;
+        String message = resourceBundle.getString("error.while.updating.app");
+        CarbonUIMessage.sendCarbonUIMessage(message, CarbonUIMessage.ERROR, request, e);
+        forwardTo = "../admin/error.jsp";
     }
 %>
 
@@ -126,9 +191,9 @@ boolean qpplicationComponentFound = CarbonUIUtil.isContextRegistered(config, "/a
 if (qpplicationComponentFound) {
 	if (!isError) {
 %>
-    location.href = '../application/configure-service-provider.jsp?action=update&display=oauthapp&spName=<%=Encode.forUriComponent(spName)%>&oauthapp=<%=Encode.forUriComponent(consumerkey)%>';
+    location.href = '../application/configure-service-provider.jsp?action=update&display=oauthapp&spName=<%=Encode.forUriComponent(spName)%>&oauthapp=<%=Encode.forUriComponent(consumerkey)%>&isHashDisabled=<%=Encode.forUriComponent(String.valueOf(isHashDisabled))%>';
 <%  } else { %>
-    location.href = '../application/configure-service-provider.jsp?action=cancel&display=oauthapp&spName=<%=Encode.forUriComponent(spName)%>';
+    location.href = '../application/configure-service-provider.jsp?action=cancel&display=oauthapp&spName=<%=Encode.forUriComponent(spName)%>&isHashDisabled=<%=Encode.forUriComponent(String.valueOf(isHashDisabled))%>';
 <%
     }
 }else {

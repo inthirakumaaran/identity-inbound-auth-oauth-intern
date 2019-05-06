@@ -76,7 +76,9 @@ import java.util.Map;
 import java.util.SortedMap;
 import java.util.StringTokenizer;
 import java.util.TreeSet;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.text.ParseException;
 
 /**
  * This class represents the JSON Web Token generator.
@@ -117,6 +119,7 @@ public class JWTTokenGenerator implements AuthorizationContextTokenGenerator {
 
     private boolean useMultiValueSeparator = true;
 
+    private final static String JWT_TOKEN_TYPE = "JWT";
 
     //constructor for testing purposes
     public JWTTokenGenerator(boolean includeClaims, boolean enableSigning) {
@@ -170,6 +173,7 @@ public class JWTTokenGenerator implements AuthorizationContextTokenGenerator {
         AccessTokenDO accessTokenDO = (AccessTokenDO)messageContext.getProperty("AccessTokenDO");
         String clientId = accessTokenDO.getConsumerKey();
         long issuedTime = accessTokenDO.getIssuedTime().getTime();
+        long validityPeriodInMillis = accessTokenDO.getValidityPeriodInMillis();
         String authzUser = messageContext.getResponseDTO().getAuthorizedUser();
         int tenantId = accessTokenDO.getTenantID();
         String tenantDomain = OAuth2Util.getTenantDomain(tenantId);
@@ -211,17 +215,23 @@ public class JWTTokenGenerator implements AuthorizationContextTokenGenerator {
 
         //generating expiring timestamp
         long currentTime = Calendar.getInstance().getTimeInMillis();
-        long expireIn = currentTime + 1000 * 60 * getTTL();
+        // Expiry time of the JWT.
+        long expireIn = validityPeriodInMillis + issuedTime;
 
         // Prepare JWT with claims set
-        JWTClaimsSet claimsSet = new JWTClaimsSet();
-        claimsSet.setIssuer(API_GATEWAY_ID);
-        claimsSet.setSubject(authzUser);
-        claimsSet.setIssueTime(new Date(issuedTime));
-        claimsSet.setExpirationTime(new Date(expireIn));
-        claimsSet.setClaim(API_GATEWAY_ID+"/subscriber",subscriber);
-        claimsSet.setClaim(API_GATEWAY_ID+"/applicationname",applicationName);
-        claimsSet.setClaim(API_GATEWAY_ID+"/enduser",authzUser);
+        JWTClaimsSet.Builder claimsSetBuilder = new JWTClaimsSet.Builder();
+        claimsSetBuilder.issuer(API_GATEWAY_ID);
+        claimsSetBuilder.subject(authzUser);
+        claimsSetBuilder.issueTime(new Date(currentTime));
+        claimsSetBuilder.expirationTime(new Date(expireIn));
+        // Nbf is set to the issue time of the JWT and not the issue time of the access token.
+        claimsSetBuilder.notBeforeTime(new Date(currentTime));
+        claimsSetBuilder.claim(API_GATEWAY_ID + "/subscriber", subscriber);
+        claimsSetBuilder.claim(API_GATEWAY_ID + "/applicationname", applicationName);
+        claimsSetBuilder.claim(API_GATEWAY_ID + "/enduser", authzUser);
+        //TODO: check setting audience
+
+
 
         if(claimsRetriever != null){
 
@@ -279,14 +289,15 @@ public class JWTTokenGenerator implements AuthorizationContextTokenGenerator {
                                 claimList.add(attValue);
                             }
                         }
-                        claimsSet.setClaim(claimURI, claimList.toArray(new String[claimList.size()]));
+                        claimsSetBuilder.claim(claimURI, claimList.toArray(new String[claimList.size()]));
                     } else {
-                        claimsSet.setClaim(claimURI, claimVal);
+                        claimsSetBuilder.claim(claimURI, claimVal);
                     }
                 }
             }
         }
 
+        JWTClaimsSet claimsSet = claimsSetBuilder.build();
         JWT jwt = null;
         if(!JWSAlgorithm.NONE.equals(signatureAlgorithm)){
             jwt = OAuth2Util.signJWT(claimsSet, signatureAlgorithm, tenantDomain);
@@ -562,5 +573,9 @@ public class JWTTokenGenerator implements AuthorizationContextTokenGenerator {
                       "returned", e);
         }
         return null;
+    }
+
+    private SignedJWT getSignedJWT(String tokenIdentifier) throws ParseException {
+        return SignedJWT.parse(tokenIdentifier);
     }
 }

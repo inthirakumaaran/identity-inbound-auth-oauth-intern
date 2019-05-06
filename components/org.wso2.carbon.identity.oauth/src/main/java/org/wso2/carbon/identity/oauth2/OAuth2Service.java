@@ -22,10 +22,10 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.oltu.oauth2.common.message.types.GrantType;
+import org.owasp.encoder.Encode;
 import org.wso2.carbon.core.AbstractAdmin;
 import org.wso2.carbon.identity.base.IdentityException;
 import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
-import org.wso2.carbon.identity.oauth.IdentityOAuthAdminException;
 import org.wso2.carbon.identity.oauth.OAuthUtil;
 import org.wso2.carbon.identity.oauth.cache.CacheEntry;
 import org.wso2.carbon.identity.oauth.cache.OAuthCache;
@@ -39,6 +39,7 @@ import org.wso2.carbon.identity.oauth.dao.OAuthAppDO;
 import org.wso2.carbon.identity.oauth.event.OAuthEventInterceptor;
 import org.wso2.carbon.identity.oauth.internal.OAuthComponentServiceHolder;
 import org.wso2.carbon.identity.oauth2.authz.AuthorizationHandlerManager;
+import org.wso2.carbon.identity.oauth2.bean.OAuthClientAuthnContext;
 import org.wso2.carbon.identity.oauth2.dao.OAuthTokenPersistenceFactory;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenReqDTO;
 import org.wso2.carbon.identity.oauth2.dto.OAuth2AccessTokenRespDTO;
@@ -72,6 +73,7 @@ import java.util.Map;
 public class OAuth2Service extends AbstractAdmin {
 
     private static Log log = LogFactory.getLog(OAuth2Service.class);
+    private static final String APP_STATE_ACTIVE = "ACTIVE";
 
     /**
      * Process the authorization request and issue an authorization code or access token depending
@@ -128,8 +130,27 @@ public class OAuth2Service extends AbstractAdmin {
         }
 
         try {
-            OAuthAppDAO oAuthAppDAO = new OAuthAppDAO();
-            OAuthAppDO appDO = oAuthAppDAO.getAppInformation(clientId);
+            if (StringUtils.isBlank(clientId)) {
+                throw new InvalidOAuthClientException("Invalid client_id. No OAuth application has been registered " +
+                        "with the given client_id");
+            }
+            OAuthAppDO appDO = OAuth2Util.getAppInformationByClientId(clientId);
+            String appState = appDO.getState();
+
+            if (StringUtils.isEmpty(appState)) {
+                if (log.isDebugEnabled()) {
+                    log.debug("A valid OAuth client could not be found for client_id: " + clientId);
+                }
+                throw new InvalidOAuthClientException("A valid OAuth client could not be found for client_id: " +
+                        Encode.forHtml(clientId));
+            }
+
+            if (!appState.equalsIgnoreCase(APP_STATE_ACTIVE)) {
+                if (log.isDebugEnabled()) {
+                    log.debug("App is not in active state in client ID: " + clientId + ". App state is: " + appState);
+                }
+                throw new InvalidOAuthClientException("Oauth application is not in active state");
+            }
 
             if (StringUtils.isEmpty(appDO.getGrantTypes()) || StringUtils.isEmpty(appDO.getCallbackUrl())) {
                 if (log.isDebugEnabled()) {
@@ -190,7 +211,9 @@ public class OAuth2Service extends AbstractAdmin {
             }
         } catch (InvalidOAuthClientException e) {
             // There is no such Client ID being registered. So it is a request from an invalid client.
-            log.error("Error while retrieving the Application Information", e);
+            if (log.isDebugEnabled()) {
+                log.debug("Error while retrieving the Application Information", e);
+            }
             validationResponseDTO.setValidClient(false);
             validationResponseDTO.setErrorCode(OAuth2ErrorCodes.INVALID_CLIENT);
             validationResponseDTO.setErrorMsg(e.getMessage());
@@ -264,6 +287,7 @@ public class OAuth2Service extends AbstractAdmin {
         OAuthRevocationResponseDTO revokeResponseDTO = new OAuthRevocationResponseDTO();
         OAuthEventInterceptor oAuthEventInterceptorProxy = OAuthComponentServiceHolder.getInstance()
                 .getOAuthEventInterceptorProxy();
+        OAuthClientAuthnContext oAuthClientAuthnContext = revokeRequestDTO.getoAuthClientAuthnContext();
 
         //Invoke pre listeners
 
@@ -310,33 +334,22 @@ public class OAuth2Service extends AbstractAdmin {
 
                 } else {
 
-                    OAuthCacheKey cacheKey = new OAuthCacheKey(revokeRequestDTO.getToken());
-                    CacheEntry result = OAuthCache.getInstance().getValueFromCache(cacheKey);
-
-                    // check cache hit, do the type check.
-                    if (result != null && result instanceof AccessTokenDO) {
-                        accessTokenDO = (AccessTokenDO) result;
-                    }
-
+                    accessTokenDO = OAuth2Util.findAccessToken(revokeRequestDTO.getToken(), true);
                     if (accessTokenDO == null) {
-                        accessTokenDO = OAuthTokenPersistenceFactory.getInstance()
-                                .getAccessTokenDAO().getAccessToken(revokeRequestDTO.getToken(), true);
-                        if (accessTokenDO == null) {
 
-                            refreshTokenDO = OAuthTokenPersistenceFactory.getInstance()
-                                    .getTokenManagementDAO().validateRefreshToken(revokeRequestDTO.getConsumerKey(),
-                                            revokeRequestDTO.getToken());
+                        refreshTokenDO = OAuthTokenPersistenceFactory.getInstance()
+                                .getTokenManagementDAO().validateRefreshToken(revokeRequestDTO.getConsumerKey(),
+                                        revokeRequestDTO.getToken());
 
-                            if (refreshTokenDO == null ||
-                                    StringUtils.isEmpty(refreshTokenDO.getRefreshTokenState()) ||
-                                    !(OAuthConstants.TokenStates.TOKEN_STATE_ACTIVE
-                                            .equals(refreshTokenDO.getRefreshTokenState()) ||
-                                            OAuthConstants.TokenStates.TOKEN_STATE_EXPIRED
-                                                    .equals(refreshTokenDO.getRefreshTokenState()))) {
-                                invokePostRevocationListeners(revokeRequestDTO, revokeResponseDTO, accessTokenDO,
-                                        refreshTokenDO);
-                                return revokeResponseDTO;
-                            }
+                        if (refreshTokenDO == null ||
+                                StringUtils.isEmpty(refreshTokenDO.getRefreshTokenState()) ||
+                                !(OAuthConstants.TokenStates.TOKEN_STATE_ACTIVE
+                                        .equals(refreshTokenDO.getRefreshTokenState()) ||
+                                        OAuthConstants.TokenStates.TOKEN_STATE_EXPIRED
+                                                .equals(refreshTokenDO.getRefreshTokenState()))) {
+                            invokePostRevocationListeners(revokeRequestDTO, revokeResponseDTO, accessTokenDO,
+                                    refreshTokenDO);
+                            return revokeResponseDTO;
                         }
                     }
                 }
@@ -349,14 +362,11 @@ public class OAuth2Service extends AbstractAdmin {
                     grantType = refreshTokenDO.getGrantType();
                 }
 
-                if (!StringUtils.equals(OAuthConstants.GrantTypes.IMPLICIT, grantType) &&
-                        !OAuth2Util.authenticateClient(revokeRequestDTO.getConsumerKey(),
-                                revokeRequestDTO.getConsumerSecret())) {
-
+                if (!isClientAuthenticated(oAuthClientAuthnContext, grantType)) {
                     OAuthRevocationResponseDTO revokeRespDTO = new OAuthRevocationResponseDTO();
                     revokeRespDTO.setError(true);
-                    revokeRespDTO.setErrorCode(OAuth2ErrorCodes.UNAUTHORIZED_CLIENT);
-                    revokeRespDTO.setErrorMsg("Unauthorized Client");
+                    revokeRespDTO.setErrorCode(getErrorCode(oAuthClientAuthnContext));
+                    revokeRespDTO.setErrorMsg(getErrorMessage(oAuthClientAuthnContext));
 
                     invokePostRevocationListeners(revokeRequestDTO, revokeRespDTO, accessTokenDO,
                             refreshTokenDO);
@@ -381,12 +391,12 @@ public class OAuth2Service extends AbstractAdmin {
                         OAuthUtil.clearOAuthCache(revokeRequestDTO.getConsumerKey(), accessTokenDO.getAuthzUser(),
                                 OAuth2Util.buildScopeString(accessTokenDO.getScope()));
                         OAuthUtil.clearOAuthCache(revokeRequestDTO.getConsumerKey(), accessTokenDO.getAuthzUser());
-                        OAuthUtil.clearOAuthCache(revokeRequestDTO.getToken());
+                        OAuthUtil.clearOAuthCache(accessTokenDO.getAccessToken());
                         String scope = OAuth2Util.buildScopeString(accessTokenDO.getScope());
                         String authorizedUser = accessTokenDO.getAuthzUser().toString();
                         synchronized ((revokeRequestDTO.getConsumerKey() + ":" + authorizedUser + ":" + scope).intern()) {
                             OAuthTokenPersistenceFactory.getInstance().getAccessTokenDAO()
-                                    .revokeAccessTokens(new String[]{revokeRequestDTO.getToken()});
+                                    .revokeAccessTokens(new String[]{accessTokenDO.getAccessToken()});
                         }
                         addRevokeResponseHeaders(revokeResponseDTO,
                                 revokeRequestDTO.getToken(),
@@ -401,8 +411,8 @@ public class OAuth2Service extends AbstractAdmin {
 
             } else {
                 revokeResponseDTO.setError(true);
-                revokeResponseDTO.setErrorCode(OAuth2ErrorCodes.INVALID_REQUEST);
-                revokeResponseDTO.setErrorMsg("Invalid revocation request");
+                revokeResponseDTO.setErrorCode(oAuthClientAuthnContext.getErrorCode());
+                revokeResponseDTO.setErrorMsg(oAuthClientAuthnContext.getErrorMessage());
                 invokePostRevocationListeners(revokeRequestDTO, revokeResponseDTO, accessTokenDO, refreshTokenDO);
                 return revokeResponseDTO;
             }
@@ -572,11 +582,15 @@ public class OAuth2Service extends AbstractAdmin {
 
     public String getOauthApplicationState(String consumerKey) {
 
-        OAuthAppDAO oAuthAppDAO = new OAuthAppDAO();
         try {
-            return oAuthAppDAO.getConsumerAppState(consumerKey);
-        } catch (IdentityOAuthAdminException e) {
-            log.error("Error while getting oauth app state", e);
+            OAuthAppDO appDO = OAuth2Util.getAppInformationByClientId(consumerKey);
+            return appDO.getState();
+        } catch (IdentityOAuth2Exception | InvalidOAuthClientException e) {
+            String msg = "Error while finding application state for application with client_id: " + consumerKey;
+            log.error(msg);
+            if (log.isDebugEnabled()) {
+                log.debug(msg, e);
+            }
             return null;
         }
     }
@@ -604,6 +618,28 @@ public class OAuth2Service extends AbstractAdmin {
             respHeaders.add(header);
             revokeResponseDTP.setResponseHeaders(respHeaders.toArray(new ResponseHeader[respHeaders.size()]));
         }
+    }
+
+    private boolean isClientAuthenticated(OAuthClientAuthnContext oAuthClientAuthnContext, String grantType) {
+        return (oAuthClientAuthnContext != null &&
+                oAuthClientAuthnContext.isAuthenticated() && !oAuthClientAuthnContext.isMultipleAuthenticatorsEngaged
+                ()) || StringUtils.equals(OAuthConstants.GrantTypes.IMPLICIT, grantType);
+    }
+
+    private String getErrorMessage(OAuthClientAuthnContext oAuthClientAuthnContext) {
+        String errorMessage = "Unauthorized Client";
+        if (oAuthClientAuthnContext != null && StringUtils.isNotEmpty(oAuthClientAuthnContext.getErrorMessage())) {
+            errorMessage = oAuthClientAuthnContext.getErrorMessage();
+        }
+        return errorMessage;
+    }
+
+    private String getErrorCode(OAuthClientAuthnContext oAuthClientAuthnContext) {
+        String errorCode = OAuth2ErrorCodes.UNAUTHORIZED_CLIENT;
+        if (oAuthClientAuthnContext != null && StringUtils.isNotEmpty(oAuthClientAuthnContext.getErrorCode())) {
+            errorCode = oAuthClientAuthnContext.getErrorCode();
+        }
+        return errorCode;
     }
 
 }

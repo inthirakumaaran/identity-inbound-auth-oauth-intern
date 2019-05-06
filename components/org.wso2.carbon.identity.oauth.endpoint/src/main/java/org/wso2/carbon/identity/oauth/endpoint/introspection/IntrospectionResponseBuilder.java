@@ -181,6 +181,13 @@ public class IntrospectionResponseBuilder {
         return this;
     }
 
+    public IntrospectionResponseBuilder setTokenString(String tokenString) {
+        if (StringUtils.isNotBlank(tokenString)) {
+            parameters.put(IntrospectionResponse.TOKEN_STRING, tokenString);
+        }
+        return this;
+    }
+
     /**
      * @param errorCode Error Code
      * @return IntrospectionResponseBuilder
@@ -196,6 +203,18 @@ public class IntrospectionResponseBuilder {
      */
     public IntrospectionResponseBuilder setErrorDescription(String description) {
         parameters.put(IntrospectionResponse.Error.ERROR_DESCRIPTION, description);
+        return this;
+    }
+
+    /**
+     * Set additional response to the introspection response.
+     *
+     * @param additionalData Additional data to be added to the introspection response.
+     * @return IntrospectionResponseBuilder.
+     */
+    public IntrospectionResponseBuilder setAdditionalData(Map<String, Object> additionalData) {
+
+        additionalData.entrySet().forEach(dataEntry -> parameters.put(dataEntry.getKey(), dataEntry.getValue()));
         return this;
     }
 }

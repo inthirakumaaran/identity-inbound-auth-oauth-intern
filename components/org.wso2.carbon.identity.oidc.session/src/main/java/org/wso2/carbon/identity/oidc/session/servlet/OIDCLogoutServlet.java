@@ -21,6 +21,7 @@ package org.wso2.carbon.identity.oidc.session.servlet;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSVerifier;
 import com.nimbusds.jose.crypto.RSASSAVerifier;
+import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
@@ -34,6 +35,8 @@ import org.wso2.carbon.identity.application.authentication.framework.model.Authe
 import org.wso2.carbon.identity.application.authentication.framework.model.CommonAuthRequestWrapper;
 import org.wso2.carbon.identity.application.authentication.framework.model.CommonAuthResponseWrapper;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
+import org.wso2.carbon.identity.application.common.IdentityApplicationManagementException;
+import org.wso2.carbon.identity.application.common.util.IdentityApplicationConstants;
 import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.oauth.common.OAuth2ErrorCodes;
 import org.wso2.carbon.identity.oauth.common.OAuthConstants;
@@ -44,29 +47,39 @@ import org.wso2.carbon.identity.oauth.dao.OAuthAppDO;
 import org.wso2.carbon.identity.oauth2.IdentityOAuth2Exception;
 import org.wso2.carbon.identity.oauth2.util.OAuth2Util;
 import org.wso2.carbon.identity.oidc.session.OIDCSessionConstants;
+import org.wso2.carbon.identity.oidc.session.OIDCSessionManagementException;
+import org.wso2.carbon.identity.oidc.session.OIDCSessionState;
+import org.wso2.carbon.identity.oidc.session.backChannelLogout.LogoutRequestSender;
 import org.wso2.carbon.identity.oidc.session.cache.OIDCSessionDataCache;
 import org.wso2.carbon.identity.oidc.session.cache.OIDCSessionDataCacheEntry;
 import org.wso2.carbon.identity.oidc.session.cache.OIDCSessionDataCacheKey;
+import org.wso2.carbon.identity.oidc.session.handler.OIDCLogoutHandler;
+import org.wso2.carbon.identity.oidc.session.internal.OIDCSessionManagementComponentServiceHolder;
 import org.wso2.carbon.identity.oidc.session.util.OIDCSessionManagementUtil;
 import org.wso2.carbon.utils.multitenancy.MultitenantUtils;
 
-import javax.servlet.ServletException;
-import javax.servlet.http.Cookie;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.security.interfaces.RSAPublicKey;
 import java.text.ParseException;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import static org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants.RequestParams.TENANT_DOMAIN;
+import static org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils.getRedirectURL;
 
 public class OIDCLogoutServlet extends HttpServlet {
 
     private static final Log log = LogFactory.getLog(OIDCLogoutServlet.class);
+    private static final String REQUEST_PARAM_SP = "sp";
     private static final long serialVersionUID = -9203934217770142011L;
 
     @Override
@@ -107,9 +120,19 @@ public class OIDCLogoutServlet extends HttpServlet {
             if (log.isDebugEnabled()) {
                 log.debug(msg);
             }
-            redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
-            response.sendRedirect(redirectURL);
-            return;
+            if (OIDCSessionManagementUtil.handleAlreadyLoggedOutSessionsGracefully()) {
+                handleMissingSessionStateGracefully(request, response);
+                return;
+            } else {
+                if (log.isDebugEnabled()) {
+                    msg = "HandleAlreadyLoggedOutSessionsGracefully configuration disabled. Missing session state is " +
+                            "handled by redirecting to error page instead of default logout page.";
+                    log.debug(msg);
+                }
+                redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
+                response.sendRedirect(getRedirectURL(redirectURL, request));
+                return;
+            }
         }
 
         if (!OIDCSessionManagementUtil.getSessionManager().sessionExists(opBrowserStateCookie.getValue())) {
@@ -117,9 +140,19 @@ public class OIDCLogoutServlet extends HttpServlet {
             if (log.isDebugEnabled()) {
                 log.debug(msg);
             }
-            redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
-            response.sendRedirect(redirectURL);
-            return;
+            if (OIDCSessionManagementUtil.handleAlreadyLoggedOutSessionsGracefully()) {
+                handleMissingSessionStateGracefully(request, response);
+                return;
+            } else {
+                if (log.isDebugEnabled()) {
+                    msg = "HandleAlreadyLoggedOutSessionsGracefully configuration enabled. No valid session found is " +
+                            "handled by redirecting to error page instead of default logout page.";
+                    log.debug(msg);
+                }
+                redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
+                response.sendRedirect(getRedirectURL(redirectURL, request));
+                return;
+            }
         }
 
         String consent = request.getParameter(OIDCSessionConstants.OIDC_LOGOUT_CONSENT_PARAM);
@@ -148,7 +181,7 @@ public class OIDCLogoutServlet extends HttpServlet {
                 if (StringUtils.isNotBlank(idTokenHint)) {
                     redirectURL = processLogoutRequest(request, response);
                     if (StringUtils.isNotBlank(redirectURL)) {
-                        response.sendRedirect(redirectURL);
+                        response.sendRedirect(getRedirectURL(redirectURL, request));
                         return;
                     }
                 } else {
@@ -156,6 +189,7 @@ public class OIDCLogoutServlet extends HttpServlet {
                     OIDCSessionDataCacheEntry cacheEntry = new OIDCSessionDataCacheEntry();
                     addSessionDataToCache(opBrowserStateCookie.getValue(), cacheEntry);
                 }
+
                 sendToFrameworkForLogout(request, response);
                 return;
             } else {
@@ -164,7 +198,7 @@ public class OIDCLogoutServlet extends HttpServlet {
             }
         }
 
-        response.sendRedirect(redirectURL);
+        response.sendRedirect(getRedirectURL(redirectURL, request));
     }
 
     /**
@@ -201,21 +235,29 @@ public class OIDCLogoutServlet extends HttpServlet {
             OAuthAppDAO appDAO = new OAuthAppDAO();
             OAuthAppDO oAuthAppDO = appDAO.getAppInformation(clientId);
 
+            String appTenantDomain = MultitenantConstants.SUPER_TENANT_DOMAIN_NAME;
+            if (oAuthAppDO.getUser() != null) {
+                appTenantDomain = oAuthAppDO.getUser().getTenantDomain();
+            }
+
+            String spName = getServiceProviderName(clientId, appTenantDomain);
+            setSPAttributeToRequest(request, spName, appTenantDomain);
+
             if (!validatePostLogoutUri(postLogoutRedirectUri, oAuthAppDO.getCallbackUrl())) {
                 String msg = "Post logout URI does not match with registered callback URI.";
                 redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
-                return redirectURL;
+                return getRedirectURL(redirectURL, request);
             }
         } catch (ParseException e) {
             String msg = "No valid session found for the received session state.";
             log.error(msg, e);
             redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
-            return redirectURL;
+            return getRedirectURL(redirectURL, request);
         } catch (IdentityOAuth2Exception | InvalidOAuthClientException e) {
             String msg = "Error occurred while getting application information. Client id not found";
             log.error(msg, e);
             redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
-            return redirectURL;
+            return getRedirectURL(redirectURL, request);
         }
 
         Map<String, String> paramMap = new HashMap<>();
@@ -277,6 +319,9 @@ public class OIDCLogoutServlet extends HttpServlet {
      */
     private String getTenantDomainForSignatureValidation(String idToken) {
         boolean isJWTSignedWithSPKey = OAuthServerConfiguration.getInstance().isJWTSignedWithSPKey();
+        if (log.isDebugEnabled()) {
+            log.debug("'SignJWTWithSPKey' property is set to : " + isJWTSignedWithSPKey);
+        }
         String tenantDomain;
 
         try {
@@ -284,10 +329,15 @@ public class OIDCLogoutServlet extends HttpServlet {
             if (isJWTSignedWithSPKey) {
                 OAuthAppDO oAuthAppDO = OAuth2Util.getAppInformationByClientId(clientId);
                 tenantDomain = OAuth2Util.getTenantDomainOfOauthApp(oAuthAppDO);
+                if (log.isDebugEnabled()) {
+                    log.debug("JWT signature will be validated with the service provider's tenant domain : " +
+                            tenantDomain);
+                }
             } else {
-                //It is not sending tenant domain with the subject in id_token by default, So to work this as
-                //expected, need to enable the option "Use tenant domain in local subject identifier" in SP config
-                tenantDomain = MultitenantUtils.getTenantDomain(extractSubjectFromIdToken(idToken));
+                if (log.isDebugEnabled()) {
+                    log.debug("JWT signature will be validated with user tenant domain.");
+                }
+                tenantDomain = extractTenantDomainFromIdToken(idToken);
             }
         } catch (ParseException e) {
             log.error("Error occurred while extracting client id from id token", e);
@@ -314,7 +364,7 @@ public class OIDCLogoutServlet extends HttpServlet {
         if (idTokenHint != null) {
             redirectURL = processLogoutRequest(request, response);
             if (StringUtils.isNotBlank(redirectURL)) {
-                response.sendRedirect(redirectURL);
+                response.sendRedirect(getRedirectURL(redirectURL, request));
                 return;
             } else {
                 redirectURL = OIDCSessionManagementUtil.getOIDCLogoutConsentURL();
@@ -325,7 +375,7 @@ public class OIDCLogoutServlet extends HttpServlet {
             Cookie opBrowserStateCookie = OIDCSessionManagementUtil.getOPBrowserStateCookie(request);
             addSessionDataToCache(opBrowserStateCookie.getValue(), cacheEntry);
         }
-        response.sendRedirect(redirectURL);
+        response.sendRedirect(getRedirectURL(redirectURL, request));
     }
 
     /**
@@ -363,8 +413,8 @@ public class OIDCLogoutServlet extends HttpServlet {
             return true;
         } else if (registeredCallbackUri.equals(postLogoutUri)) {
             return true;
-        } else {    // Provided Post logout redirect URL does not match the registered callback url.
-            log.warn("Provided Post logout redirect URL does not match with the provided one.");
+        } else {
+            log.warn("Provided Post logout redirect URL does not match the registered callback url.");
             return false;
         }
     }
@@ -377,18 +427,52 @@ public class OIDCLogoutServlet extends HttpServlet {
      */
     private String extractClientFromIdToken(String idToken) throws ParseException {
 
-        return SignedJWT.parse(idToken).getJWTClaimsSet().getAudience().get(0);
+        String clientId = (String) SignedJWT.parse(idToken).getJWTClaimsSet()
+                .getClaims().get(OIDCSessionConstants.OIDC_ID_TOKEN_AZP_CLAIM);
+
+        if (StringUtils.isBlank(clientId)) {
+            clientId = SignedJWT.parse(idToken).getJWTClaimsSet().getAudience().get(0);
+            log.info("Provided ID Token does not contain azp claim with client ID. " +
+                    "Client ID is extracted from the aud claim in the ID Token.");
+        }
+
+        return clientId;
     }
 
     /**
-     * Extract Subject from id token
+     * Extract tenant domain from id token
      * @param idToken id token
-     * @return Authenticated Subject
+     * @return tenant domain
      * @throws ParseException
      */
-    private String extractSubjectFromIdToken(String idToken) throws ParseException {
+    private String extractTenantDomainFromIdToken(String idToken) throws ParseException {
 
-        return SignedJWT.parse(idToken).getJWTClaimsSet().getSubject();
+        String tenantDomain = null;
+        Map realm = null;
+
+        JWTClaimsSet claimsSet = SignedJWT.parse(idToken).getJWTClaimsSet();
+        if (claimsSet.getClaims().get(OAuthConstants.OIDCClaims.REALM) instanceof Map) {
+            realm = (Map) claimsSet.getClaims().get(OAuthConstants.OIDCClaims.REALM);
+        }
+        if (realm != null) {
+            tenantDomain = (String) realm.get(OAuthConstants.OIDCClaims.TENANT);
+        }
+        if (StringUtils.isBlank(tenantDomain)) {
+            if (log.isDebugEnabled()) {
+                log.debug("Failed to retrieve tenant domain from 'realm' claim. Hence falling back to 'sub' claim.");
+            }
+            //It is not sending tenant domain with the subject in id_token by default, So to work this as
+            //expected, need to enable the option "Use tenant domain in local subject identifier" in SP config
+            tenantDomain = MultitenantUtils.getTenantDomain(claimsSet.getSubject());
+            if (log.isDebugEnabled()) {
+                log.debug("User tenant domain derived from 'sub' claim of JWT. Tenant domain : " + tenantDomain);
+            }
+        } else {
+            if (log.isDebugEnabled()) {
+                log.debug("User tenant domain found in 'realm' claim of JWT. Tenant domain : " + tenantDomain);
+            }
+        }
+        return tenantDomain;
     }
 
     @Override
@@ -399,6 +483,17 @@ public class OIDCLogoutServlet extends HttpServlet {
 
     private void sendToFrameworkForLogout(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
+
+        try {
+            triggerLogoutHandlersForPreLogout(request, response);
+        } catch (OIDCSessionManagementException e) {
+            log.error("Error executing logout handlers on pre logout.");
+            if (log.isDebugEnabled()) {
+                log.debug("Error executing logout handlers on pre logout.", e);
+            }
+            response.sendRedirect(getRedirectURL(OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes
+                    .SERVER_ERROR, "User logout failed."), request));
+        }
 
         // Generate a SessionDataKey. Authentication framework expects this parameter
         String sessionDataKey = UUID.randomUUID().toString();
@@ -437,29 +532,81 @@ public class OIDCLogoutServlet extends HttpServlet {
 
         String sessionDataKey = request.getParameter(FrameworkConstants.SESSION_DATA_KEY);
         OIDCSessionDataCacheEntry cacheEntry = getSessionDataFromCache(sessionDataKey);
+
+
         if (cacheEntry != null) {
+            if (log.isDebugEnabled()) {
+                String clientId = cacheEntry.getParamMap().get(OIDCSessionConstants.OIDC_CACHE_CLIENT_ID_PARAM);
+                String sidClaim;
+                log.debug("Logout request received from client: " + clientId);
+
+                Cookie opbsCookie = OIDCSessionManagementUtil.getOPBrowserStateCookie(request);
+                if (opbsCookie != null) {
+                    String obpsCookieValue = opbsCookie.getValue();
+                    OIDCSessionState sessionState = OIDCSessionManagementUtil.getSessionManager()
+                            .getOIDCSessionState(obpsCookieValue);
+                    sidClaim = sessionState.getSidClaim();
+                    log.debug("Logout request received for sid: " + sidClaim);
+                }
+            }
+            // BackChannel logout request.
+            doBackChannelLogout(request);
             String redirectURL = cacheEntry.getPostLogoutRedirectUri();
             if (redirectURL == null) {
                 redirectURL = OIDCSessionManagementUtil.getOIDCLogoutURL();
             }
+
+            try {
+                triggerLogoutHandlersForPostLogout(request, response);
+            } catch (OIDCSessionManagementException e) {
+                log.error("Error executing logout handlers on post logout.");
+                if (log.isDebugEnabled()) {
+                    log.debug("Error executing logout handlers on post logout.", e);
+                }
+                response.sendRedirect(getRedirectURL(OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes
+                        .SERVER_ERROR, "User logout failed."), request));
+            }
+
             redirectURL = appendStateQueryParam(redirectURL, cacheEntry.getState());
             removeSessionDataFromCache(sessionDataKey);
             Cookie opBrowserStateCookie = OIDCSessionManagementUtil.removeOPBrowserStateCookie(request, response);
             OIDCSessionManagementUtil.getSessionManager().removeOIDCSessionState(opBrowserStateCookie.getValue());
-            response.sendRedirect(redirectURL);
+            response.sendRedirect(getRedirectURL(redirectURL, request));
         } else {
-            response.sendRedirect(
-                    OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.SERVER_ERROR, "User logout failed"));
+            response.sendRedirect(getRedirectURL(OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes
+                    .SERVER_ERROR, "User logout failed"), request));
+        }
+    }
+
+    private void triggerLogoutHandlersForPostLogout(HttpServletRequest request,
+                                                    HttpServletResponse response) throws OIDCSessionManagementException {
+
+        List<OIDCLogoutHandler> oidcLogoutHandlers =
+                OIDCSessionManagementComponentServiceHolder.getOIDCLogoutHandlers();
+
+        for (OIDCLogoutHandler oidcLogoutHandler : oidcLogoutHandlers) {
+            oidcLogoutHandler.handlePostLogout(request, response);
+        }
+    }
+
+    private void triggerLogoutHandlersForPreLogout(HttpServletRequest request,
+                                                   HttpServletResponse response) throws OIDCSessionManagementException {
+
+        List<OIDCLogoutHandler> oidcLogoutHandlers =
+                OIDCSessionManagementComponentServiceHolder.getOIDCLogoutHandlers();
+
+        for (OIDCLogoutHandler oidcLogoutHandler : oidcLogoutHandlers) {
+            oidcLogoutHandler.handlePreLogout(request, response);
         }
     }
 
     private void addAuthenticationRequestToRequest(HttpServletRequest request,
-            AuthenticationRequestCacheEntry authRequest) {
+                                                   AuthenticationRequestCacheEntry authRequest) {
         request.setAttribute(FrameworkConstants.RequestAttribute.AUTH_REQUEST, authRequest);
     }
 
     private void sendRequestToFramework(HttpServletRequest request, HttpServletResponse response, String sessionDataKey,
-            String type) throws ServletException, IOException {
+                                        String type) throws ServletException, IOException {
 
         CommonAuthenticationHandler commonAuthenticationHandler = new CommonAuthenticationHandler();
 
@@ -475,7 +622,11 @@ public class OIDCLogoutServlet extends HttpServlet {
         if (object != null) {
             AuthenticatorFlowStatus status = (AuthenticatorFlowStatus) object;
             if (status == AuthenticatorFlowStatus.INCOMPLETE) {
-                response.sendRedirect(responseWrapper.getRedirectURL());
+                if (responseWrapper.isRedirect()) {
+                    response.sendRedirect(responseWrapper.getRedirectURL());
+                } else if (responseWrapper.getContent().length > 0) {
+                    responseWrapper.write();
+                }
             } else {
                 handleLogoutResponseFromFramework(requestWrapper, response);
             }
@@ -510,5 +661,74 @@ public class OIDCLogoutServlet extends HttpServlet {
     private static boolean getOpenIDConnectSkipeUserConsent() {
         return OAuthServerConfiguration.getInstance().getOpenIDConnectSkipeUserConsentConfig();
 
+    }
+
+    /**
+     * Sends logout token to registered back-channel logout uris.
+     *
+     * @param request
+     */
+    private void doBackChannelLogout(HttpServletRequest request) {
+
+        LogoutRequestSender.getInstance().sendLogoutRequests(request);
+        if (log.isDebugEnabled()) {
+            log.debug("Sending backchannel logout request.");
+        }
+    }
+
+    private void setSPAttributeToRequest(HttpServletRequest req, String spName, String tenantDomain) {
+
+        req.setAttribute(REQUEST_PARAM_SP, spName);
+        req.setAttribute(TENANT_DOMAIN, tenantDomain);
+    }
+
+    private String getServiceProviderName(String clientId, String tenantDomain) {
+
+        String spName = null;
+        try {
+            spName = OIDCSessionManagementComponentServiceHolder.getApplicationMgtService()
+                    .getServiceProviderNameByClientId(clientId, IdentityApplicationConstants.OAuth2.NAME, tenantDomain);
+        } catch (IdentityApplicationManagementException e) {
+            log.error("Error while getting Service provider name for client Id:" + clientId + " in tenant: " + tenantDomain, e);
+        }
+        return spName;
+    }
+
+    private void handleMissingSessionStateGracefully(HttpServletRequest request, HttpServletResponse response)
+            throws IOException {
+
+        String redirectURL = OIDCSessionManagementUtil.getOIDCLogoutURL();
+        String idTokenHint = request.getParameter(OIDCSessionConstants.OIDC_ID_TOKEN_HINT_PARAM);
+        String postLogoutRedirectUri = request.getParameter(OIDCSessionConstants.OIDC_POST_LOGOUT_REDIRECT_URI_PARAM);
+        if (StringUtils.isEmpty(idTokenHint) || StringUtils.isEmpty(postLogoutRedirectUri)) {
+            response.sendRedirect(getRedirectURL(redirectURL, request));
+            return;
+        }
+        if (!validateIdToken(idTokenHint)) {
+            String msg = "ID token signature validation failed.";
+            log.error(msg);
+            redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
+            response.sendRedirect(getRedirectURL(redirectURL, request));
+            return;
+        }
+        try {
+            String clientId = extractClientFromIdToken(idTokenHint);
+            String callbackUrl = new OAuthAppDAO().getAppInformation(clientId).getCallbackUrl();
+            if (validatePostLogoutUri(postLogoutRedirectUri, callbackUrl)) {
+                redirectURL = postLogoutRedirectUri;
+            } else {
+                redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED,
+                        "Post logout URI does not match with registered callback URI.");
+            }
+        } catch (ParseException e) {
+            String msg = "Error occurred while getting application information.";
+            log.error(msg, e);
+            redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
+        } catch (IdentityOAuth2Exception | InvalidOAuthClientException e) {
+            String msg = "Error occurred while getting application information. Client id not found.";
+            log.error(msg, e);
+            redirectURL = OIDCSessionManagementUtil.getErrorPageURL(OAuth2ErrorCodes.ACCESS_DENIED, msg);
+        }
+        response.sendRedirect(getRedirectURL(redirectURL, request));
     }
 }

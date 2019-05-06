@@ -20,8 +20,14 @@ package org.wso2.carbon.identity.oauth.common;
 
 public final class OAuthConstants {
 
+    //OIDC request headers.
+    public static final String AMR = "amr";
+    public static final String ACR = "acr";
+    public static final String AT_HASH = "at_hash";
+
     //OAuth2 request headers.
     public static final String HTTP_REQ_HEADER_AUTHZ = "Authorization";
+    public static final String HTTP_REQ_HEADER_AUTH_METHOD_BASIC = "Basic";
 
     // OAuth2 response headers
     public static final String HTTP_RESP_HEADER_CACHE_CONTROL = "Cache-Control";
@@ -97,6 +103,10 @@ public final class OAuthConstants {
     //Response types
     public static final String NONE = "none";
     public static final String TOKEN = "token";
+    public static final String CODE_TOKEN = "code token";
+    public static final String CODE_IDTOKEN = "code id_token";
+    public static final String CODE_IDTOKEN_TOKEN = "code id_token token";
+    public static final String IDTOKEN_TOKEN = "id_token token";
 
     //Constants used for OAuth/OpenID Connect Configuration UI
     public static final String CALLBACK_URL_REGEXP_PREFIX = "regexp=";
@@ -114,6 +124,7 @@ public final class OAuthConstants {
     public static final String OAUTH_INTERCEPTOR_PROXY = "OauthDataInterceptorHandlerProxy";
 
     public static final String RESPONSE_HEADERS_PROPERTY = "RESPONSE_HEADERS";
+    public static final String CLIENT_AUTHN_CONTEXT = "oauth.client.authentication.context";
 
 
     //Constants used for multiple scopes
@@ -132,6 +143,7 @@ public final class OAuthConstants {
         public static final String IWA_NTLM = "iwa:ntlm";
         public static final String PASSWORD = "password";
         public static final String AUTHORIZATION_CODE = "authorization_code";
+        public static final String REFRESH_TOKEN = "refresh_token";
 
         private GrantTypes() {
         }
@@ -174,6 +186,7 @@ public final class OAuthConstants {
         public static final String AUTH_TIME = "auth_time";
         public static final String ESSENTIAL = "essential";
         public static final String USERINFO = "userinfo";
+        public static final String CLIENT_ID = "client_id";
 
         private OAuth20Params() {
 
@@ -296,13 +309,38 @@ public final class OAuthConstants {
         public static final String PHONE_NUMBER_VERIFIED = "phone_number_verified";
         public static final String EMAIL_VERIFIED = "email_verified";
         public static final String ADDRESS = "address";
+        public static final String CUSTOM = "custom";
         public static final String AZP = "azp";
         public static final String AUTH_TIME = "auth_time";
         public static final String AT_HASH = "at_hash";
         public static final String NONCE = "nonce";
         public static final String ACR = "acr";
+        public static final String MAX_AGE = "max_age";
+        // OIDC Specification : http://openid.net/specs/openid-connect-core-1_0.html
+        public static final String C_HASH = "c_hash";
+        public static final String SESSION_ID_CLAIM = "sid";
+        public static final String REALM = "realm";
+        public static final String TENANT = "tenant";
+        public static final String USERSTORE = "userstore";
 
         private OIDCClaims() {}
+    }
+
+    public static class OIDCConfigProperties {
+        public static final String REQUEST_OBJECT_SIGNED = "requestObjectSigned";
+        public static final String ID_TOKEN_ENCRYPTED = "idTokenEncrypted";
+        public static final String ID_TOKEN_ENCRYPTION_ALGORITHM = "idTokenEncryptionAlgorithm";
+        public static final String ID_TOKEN_ENCRYPTION_METHOD = "idTokenEncryptionMethod";
+        public static final String NO_LOGOUT_SELECTED = "none";
+        public static final String BACK_CHANNEL_LOGOUT = "backchannel";
+        public static final String FRONT_CHANNEL_LOGOUT = "frontchannel";
+        public static final String BACK_CHANNEL_LOGOUT_URL = "backChannelLogoutURL";
+        public static final String FRONT_CHANNEL_LOGOUT_URL = "frontchannelLogoutURL";
+        public static final String TOKEN_TYPE = "tokenType";
+        public static final String BYPASS_CLIENT_CREDENTIALS = "bypassClientCredentials";
+        public static final String RENEW_REFRESH_TOKEN = "renewRefreshToken";
+
+        private OIDCConfigProperties() { }
     }
 
     public static class SignatureAlgorithms {
